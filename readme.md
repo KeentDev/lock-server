@@ -17,6 +17,25 @@ List of `user` APIs:
 
 ___
 
+## User Lists
+
+Method: `GET`  
+Path: `/list`
+
+Fetches a paginated list of users and their basic profile.
+
+Payload: 
+  * `page_cursor`: page index
+  * `page_size`: size of the page to return
+
+Returns:
+  * Array of users with their basic profile:
+    * `first_name`
+    * `last_name`
+    * `student_id_num`
+    * `user_id`
+
+___
 
 ## Sign in
 
@@ -79,8 +98,9 @@ Path: `/rental-info`
 Fetch a user's rental information.
 
 Payload: 
-  * `student_id`: Student ID of the student
-    * 7 numeric digits
+  * Either of the f.f. but not both:
+    * `user_id`
+    * `unit_id`
   * Auth token. _Soon_.
 
 Returns:  

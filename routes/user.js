@@ -2,7 +2,7 @@ const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
 
-const serverUrl = 'localhost';
+const serverUrl = '192.168.254.109';
 const serverPort = 27017;
 
 const router = express.Router();
@@ -76,7 +76,7 @@ router.get('/list', async (req, res) => {
           'first_name': user.first_name,
           'last_name': user.last_name
         },
-        'student_id_num': user.id_num,
+        'student_id': user.id_num,
         'user_id': user._id
       }
     })
@@ -96,7 +96,7 @@ router.get('/list', async (req, res) => {
       res.send(body);
     });
 });
-
+    
 router.get('/profile', async (req, res) => {
   const users = await loadCollections('Student_DB');
   const studentId = req.body.student_id || null;
@@ -285,7 +285,8 @@ router.get('/do/list', async (req, res) => {
     .then(officers => {
 
       for (let i = 0; i < officers.length; i++) {
-        officers[i].ObjectKeyMapper('_id', 'officer_id');
+        officers[i].ObjectKeyMapper('_id', 'user_id');
+        officers[i].ObjectKeyMapper('id_num', 'officer_id');
       }
 
       body.data = officers;
@@ -303,38 +304,68 @@ router.get('/do/profile', async (req, res) => {
   const officersCollection = await loadCollections('Discipline_Officers');
 
   let officerId = req.body.officer_id || null;
+  let userId = req.body.user_id || null;
   let body = {};
 
-  try {
-    const id = new ObjectID(officerId);
-
-    if (officerId) {
-      await officersCollection
+  if(officerId && userId){
+    body.constructError(01, 'Only either User ID or Officer ID can be a query, NOT both.');
+    res.send(body);
+  } else if (officerId) {
+    verifyObjectId(officerId)
+      .then(async id => {
+        await officersCollection
         .find({
-          "_id": id
+          "id_num": officerId
         })
         .toArray()
         .then(data => {
-          if (data.length > 0) {
-            body.data = data;
-            body.success = true;
-          } else {
-            body.constructError(00, `Officer user with ID ${id} is not found.`);
-          }
-
-          res.send(body);
+          verifyOfficer(data, 'Officer', officerId);
         })
         .catch(err => {
           body.constructError(02, err);
           res.send(body);
         });
+      })
+      .catch(err => {
+        body.constructError(03, `Please encode a valid Officer ID format and value.`);
+        res.send(body);
+      })
+  } else if(userId) {
+    verifyObjectId(userId)
+      .then(async id => {
+        await officersCollection
+        .find({
+          "_id": id
+        })
+        .toArray()
+        .then(data => {
+          verifyOfficer(data, 'User', userId);
+        })
+        .catch(err => {
+          body.constructError(02, err);
+          res.send(body);
+        });
+      })
+      .catch(err => {
+        body.constructError(03, `Please encode a valid User ID format and value.`);
+        res.send(body);
+      })
+  } else {
+    body.constructError(01, 'Please encode only either User ID or Officer ID can be a query, NOT both.');
+    res.send(body);
+  }
+
+  function verifyOfficer(data, label, id) {
+    if (data.length > 0) {
+      let officerData = data[0];
+      officerData.ObjectKeyMapper('_id', 'user_id');
+      officerData.ObjectKeyMapper('id_num', 'officer_id');
+      body.data = officerData;
+      body.success = true;
     } else {
-      body.constructError(01, 'Officer user ID parameter is required.');
-      res.send(body);
+      body.constructError(00, `${label} with ID ${id} is not found.`);
     }
-  } catch (error) {
-    console.error(error)
-    body.constructError(03, 'Please encode a valid user id format and value.');
+
     res.send(body);
   }
 })

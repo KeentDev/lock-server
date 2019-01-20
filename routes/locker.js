@@ -2,7 +2,7 @@ const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
 
-const serverUrl = 'localhost';
+const serverUrl = '192.168.254.109';
 const serverPort = 27017;
 
 const router = express.Router();
@@ -59,6 +59,17 @@ async function loadCollections(collectionName) {
   return client.db('Thesis').collection(collectionName);
 }
 
+router.get('/esp-test', async (req, res) => {
+  console.log('connection success');
+  res.status(200).send('test');
+});
+
+router.post('/esp-test', async (req, res) => {
+  let body = req.body.data;
+  console.log('connection success');
+  res.status(200).send(JSON.stringify(body));
+});
+
 router.get('/unit-list', async (req, res) => {
   const lockers = await loadCollections('Locker_Units');
   const area = req.body.area_num || null;
@@ -80,7 +91,7 @@ router.get('/unit-list', async (req, res) => {
 
         if (data.length > 0) {
           for (let i = 0; i < data.length; i++) {
-            data[i].ObjectKeyMapper('_id', 'user_id');
+            data[i].ObjectKeyMapper('_id', 'unit_id');
           }
 
           body.data = data;
@@ -125,7 +136,7 @@ router.get('/area-list', async (req, res) => {
     })
 });
 
-router.get('/transaction/authorization', async (req, res) => {
+router.post('/transaction/authorization', async (req, res) => {
   const lockers = await loadCollections('Locker_Units');
   const rentalInfos = await loadCollections('Student_Unit_Info');
 
@@ -149,11 +160,10 @@ router.get('/transaction/authorization', async (req, res) => {
               if (userRentalData.mode == 'occupied') {
                 apiCodes.push(2);
               } else if (userRentalData.mode == 'reserved') {
-                apiCodes.push(2)
+                apiCodes.push(2);
               }
               return Promise.resolve(false);
             } else {
-              console.log(userRentalData);
               return Promise.resolve(true);
             }
           })
