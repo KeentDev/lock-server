@@ -1,8 +1,10 @@
 const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
+const jwt = require('jsonwebtoken');
+const config = require('../config');
 
-const serverUrl = '192.168.254.109';
+const serverUrl = '192.168.254.105';
 const serverPort = 27017;
 
 const router = express.Router();
@@ -52,6 +54,76 @@ async function loadCollections(collectionName) {
 
   return client.db('Thesis').collection(collectionName);
 }
+
+router.post('/rfid/auth', async (req, res) => {
+  const rfid_cards = await loadCollections('RFID_Card');
+
+  const serial_id = req.query.serial_id || req.body.serial_id || null;
+  const body = {};
+
+  if(serial_id){
+    await rfid_cards
+      .find({
+        'serial_id': serial_id
+      }, {
+        'projection': {
+          '_id': 0
+        }
+      })
+      .toArray()
+      .then(data => {
+        let body = {};
+
+        if (data.length <= 0) {
+          body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
+          res.send(body);
+        } else {
+          const payload = {};
+
+          const token = jwt.sign(payload, config.secret, {
+            expiresIn: '1h' // expires in 24 hours
+          });
+
+          body.data = token;
+          body.success = true;
+
+          res.send(body);
+        }
+      })
+      .catch(err => {
+        body.constructError(02, err);
+        res.send(err);
+      });
+  }else{
+    body.constructError(01, 'A Serial ID parameter is required.');
+    res.send(body);
+  }
+
+  
+});
+
+router.use((req, res, next) => {
+  const token = req.body.token || req.query.token || req.headers['x-access-token'];
+
+  let body = {};
+
+  if(token) {
+    jwt.verify(token, config.secret, (err, decoded) => {
+      if(err) {
+        body.constructError(05, 'Failed to authenticate.');
+        return res.send(body);
+      }else {
+        req.decoded = decoded;
+        next();
+      }
+    })
+  }else {
+    body.constructError(01, 'Please encode a valid token');
+
+    return res.status(403).send(body);
+  }
+
+});
 
 router.get('/list', async (req, res) => {
   const users = await loadCollections('Student_DB');

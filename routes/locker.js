@@ -1,9 +1,10 @@
 const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
-
-const serverUrl = '192.168.254.109';
+const serverUrl = '192.168.254.105';
 const serverPort = 27017;
+const jwt = require('jsonwebtoken');
+const config = require('../config');
 
 const router = express.Router();
 
@@ -58,6 +59,29 @@ async function loadCollections(collectionName) {
 
   return client.db('Thesis').collection(collectionName);
 }
+
+router.use((req, res, next) => {
+  const token = req.body.token || req.query.token || req.headers['x-access-token'];
+
+  let body = {};
+
+  if(token) {
+    jwt.verify(token, config.secret, (err, decoded) => {
+      if(err) {
+        body.constructError(05, 'Failed to authenticate');
+        return res.send(body);
+      }else {
+        req.decoded = decoded;
+        next();
+      }
+    })
+  }else {
+    body.constructError(05, 'Please encode a valid token');
+
+    return res.status(403).send(body);
+  }
+
+});
 
 router.get('/esp-test', async (req, res) => {
   console.log('connection success');
@@ -134,6 +158,102 @@ router.get('/area-list', async (req, res) => {
       body.constructError(02, err);
       res.send(body);
     })
+});
+
+router.get('/area-info', async (req, res) => {
+  const areas = await loadCollections('Locker_Area');
+  const areaId = req.body.area_id || req.query.area_id || null;
+
+  let body = {};
+
+  if(areaId){
+    verifyObjectId(areaId)
+      .then(async id => {
+        await areas
+        .find({
+          '_id': id
+        })
+        .toArray()
+        .then(data => {
+          if(data.length > 0){
+            bodyData = data[0];
+
+            bodyData.ObjectKeyMapper('_id', 'area_id');
+
+            body.data = bodyData;
+            body.success = true;
+
+            res.send(body);
+          }else{
+            body.constructError(00, `Found no information available on area ID ${id}.`);
+          }
+          res.send(body);
+        })
+        .catch(err => {
+          body.constructError(02, err);
+          res.send(body);
+        })
+      })
+      .catch(err => {
+        console.error(err);
+        body.constructError(03, `Please encode a valid Area ID format and value.`);
+        res.send(body);
+      });
+  }else{
+    body.constructError(01, 'Area ID parameter is required.');
+    res.send(body);
+  }
+
+  // res.send(body);
+});
+
+router.get('/suggest-unit', async (req, res) => {
+  const lockers = await loadCollections('Locker_Units');
+  var area = req.body.area_num || req.query.area_num || null;
+
+  area = parseInt(area);
+
+  let body = {};
+
+  if(area){
+    await lockers
+      .find({
+        'unit_area': area,
+        'unit_status': 'available'
+      }, {
+        projection: {
+          'slave_address': 0
+        }
+      })
+      .toArray()
+      .then(data => {
+        let body = {};
+
+        if (data.length > 0) {
+          let max = data.length - 1;
+          let min = 0;
+          let randomIndex = Math.floor(Math.random()*(max-min+1)+min); 
+          let bodyData = data[randomIndex];
+
+          bodyData.ObjectKeyMapper('_id', 'unit_id');
+
+          body.data = bodyData;
+          body.success = true;
+        } else {
+          body.constructError(00, `No available locker units on Area #${area}.`);
+        }
+
+        res.send(body);
+      })
+      .catch(err => {
+        body.constructError(02, err);
+        res.send(body); 
+      })
+  }else{
+    body.constructError(01, 'Area number parameter is required.');
+    res.send(body);
+  }
+
 });
 
 router.post('/transaction/authorization', async (req, res) => {
@@ -280,7 +400,6 @@ router.post('/transaction/feed', async (req, res) => {
           .then(async isAuth => {
             async function isUpdateAuthorized() {
               return new Promise(async (resolve, reject) => {
-                console.log('is auth:' + isAuth);
                 if (isAuth) {
                   const transactionLogs = await loadCollections('Transaction_Log');
 
