@@ -4,7 +4,7 @@ const ObjectID = require('mongodb').ObjectID;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
-const serverUrl = '192.168.254.105';
+const serverUrl = '192.168.254.100';
 const serverPort = 27017;
 
 const router = express.Router();
@@ -63,28 +63,32 @@ router.post('/rfid/auth', async (req, res) => {
 
   if(serial_id){
     await rfid_cards
-      .find({
+      .findOne({
         'serial_id': serial_id
       }, {
         'projection': {
           '_id': 0
         }
       })
-      .toArray()
       .then(data => {
         let body = {};
+        let bodyData = {};
 
         if (data.length <= 0) {
           body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
           res.send(body);
         } else {
-          const payload = {};
+          const payload = {
+            'user_id': data.user_id
+          };
 
           const token = jwt.sign(payload, config.secret, {
             expiresIn: '1h' // expires in 24 hours
           });
 
-          body.data = token;
+          bodyData.token = token;
+
+          body.data = bodyData;
           body.success = true;
 
           res.send(body);
@@ -98,7 +102,6 @@ router.post('/rfid/auth', async (req, res) => {
     body.constructError(01, 'A Serial ID parameter is required.');
     res.send(body);
   }
-
   
 });
 
