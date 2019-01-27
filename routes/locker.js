@@ -1,7 +1,7 @@
 const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
-const serverUrl = '192.168.254.100';
+const serverUrl = '192.168.254.101';
 const serverPort = 27017;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
@@ -276,6 +276,29 @@ router.post('/transaction/authorization', async (req, res) => {
   const userId = req.decoded.user_id || null;
   const transactionType = req.body.transaction_type || null;
 
+  let transActivityType = null;
+
+  switch (transactionType) {
+    case 'rent':
+      transActivityType = activityObj.RENT_AUTH;
+      break;
+
+    case 'extend':
+      transActivityType = activityObj.EXTEND_AUTH;
+      break;
+
+    case 'overdue':
+      transActivityType = activityObj.OVERDUE_AUTH;
+      break;
+
+    case 'reserve':
+      transActivityType = activityObj.RESERVE_AUTH;
+      break;
+
+    default:
+      break;
+  }
+
   let apiCodes = [];
   let body = {};
 
@@ -284,21 +307,13 @@ router.post('/transaction/authorization', async (req, res) => {
       try {
         let id = new ObjectID(userId);
 
-        if([activityObj.RENT_AUTH, // rent_auth
-            activityObj.RENT_SESSION, // rent_session
-            activityObj.RESERVE_AUTH, // reserve_auth
-            activityObj.RESERVE_SESSION // reserve_session
-        ].includes(type)){
-          return await isSessionAvailable('user_id', userId)
-            .then(isAvailable => {
-              return Promise.resolve(isAvailable);
-            })
-            .catch(err => {
-              return Promise.reject(false);
-            });
-        }else{
-
-        }
+        return await isSessionAuth('user_id', userId, type)
+          .then(isAuth => {
+            return Promise.resolve(isAuth);
+          })
+          .catch(err => {
+            return Promise.reject(false);
+          })
 
       } catch (error) {
         body.constructError(3.2, 'Please encode a valid User ID format and value.');
@@ -315,24 +330,15 @@ router.post('/transaction/authorization', async (req, res) => {
       try {
         let id = new ObjectID(unitId);
         
-        if([activityObj.RENT_AUTH, // rent_auth
-            activityObj.RENT_SESSION, // rent_session
-            activityObj.RESERVE_AUTH, // reserve_auth
-            activityObj.RESERVE_SESSION // reserve_session
-        ].includes(type)){
-          return await isSessionAvailable('unit_id', unitId)
-            .then(isAvailable => {
-              return Promise.resolve(isAvailable);
-            })
-            .catch(err => {
-              return Promise.reject(false);
-            });
-        }else{
-          
-        }
+        return await isSessionAuth('unit_id', unitId, type)
+          .then(isAuth => {
+            return Promise.resolve(isAuth);
+          })
+          .catch(err => {
+            return Promise.reject(false);
+          })
         
       } catch (error) {
-        console.log(error);
         body.constructError(3.1, 'Please encode a valid Unit ID format and value.');
         return Promise.reject(false);
       }
@@ -377,16 +383,7 @@ router.post('/transaction/authorization', async (req, res) => {
                   .then(async sessionData => {
                     let sessionEndTime = parseFloat(sessionData.end_date);
                       
-                    if((sessionEndTime - currTime) > 0){
-                      let apiCode;
-                      if(idKey == 'unit_id'){
-                        apiCode = 1;
-                      }else if(idKey == 'user_id'){
-                        apiCode = 2;
-                      }
-
-                      apiCodes.push(apiCode);
-                      
+                    if((sessionEndTime - currTime) > 0){  
                       return Promise.resolve(false);
                     }else{
                       await rentalInfos
@@ -421,10 +418,43 @@ router.post('/transaction/authorization', async (req, res) => {
       });
   }
 
+  async function isSessionAuth(idKey, idValue, type){
+    return await isSessionAvailable(idKey, idValue)
+      .then(isAvailable => {
+        let isAuth;
+        if([activityObj.RENT_AUTH,
+            activityObj.RENT_SESSION,
+            activityObj.RESERVE_AUTH,
+            activityObj.RESERVE_SESSION
+          ].includes(type)){
+          isAuth = isAvailable;
+        }else if([activityObj.OVERDUE_AUTH,
+          activityObj.OVERDUE_SESSION,
+          activityObj.EXTEND_AUTH,
+          activityObj.EXTEND_SESSION
+          ].includes(type)){
+          isAuth = !isAvailable;
+        }
+        if(!isAuth){
+          let apiCode = 0;
+          if(idKey == 'unit_id'){
+            apiCode = 1;
+          }else if(idKey == 'user_id'){
+            apiCode = 2;
+          }
+          apiCodes.push(apiCode);
+        }
+        return Promise.resolve(isAuth);
+      })
+      .catch(err => {
+        return Promise.reject(false);
+      });
+  }
+
   await Promise.all([
-    isUnitAuthorized(unitId, transactionType),
-    isUserAuthorized(userId, transactionType),
-    isTransactionTypeValid(transactionType)
+    isUnitAuthorized(unitId, transActivityType),
+    isUserAuthorized(userId, transActivityType),
+    isTransactionTypeValid(transActivityType)
   ]).then(async auth => {
     const activityLogs = await loadCollections('Unit_Activity_Logs');
 
@@ -433,7 +463,7 @@ router.post('/transaction/authorization', async (req, res) => {
     let rentAuthorized = await unitAuthorized && await userAuthorized;
 
     activityLogs.insertOne({
-      'type': 'rent_authorize',
+      'type': transActivityType,
       'date': currTime,
       'authorized': await rentAuthorized,
       'user_id': userId,
