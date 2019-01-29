@@ -4,7 +4,7 @@ const ObjectID = require('mongodb').ObjectID;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
-const serverUrl = '192.168.254.101';
+const serverUrl = '192.168.254.100';
 const serverPort = 27017;
 
 const router = express.Router();
