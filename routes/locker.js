@@ -6,7 +6,7 @@ const serverPort = 27017;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
-const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'unit_usage'];
+const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
 const activityObj = {
   RENT_AUTH: activityType[0],
   EXTEND_AUTH: activityType[1],
@@ -16,7 +16,8 @@ const activityObj = {
   EXTEND_SESSION: activityType[5],
   OVERDUE_SESSION: activityType[6],
   RESERVE_SESSION: activityType[7],
-  UNIT_USAGE: activityType[8],
+  END_SESSION: activityType[8],
+  UNIT_USAGE: activityType[9],
 }
 
 const router = express.Router();
@@ -310,7 +311,7 @@ router.post('/transaction/authorization', async (req, res) => {
       try {
         let id = new ObjectID(userNum);
 
-        return await isSessionAuth('id_num', userNum, type)
+        return await isSessionAuth('user_num', userNum, type)
           .then(isAuth => {
             return Promise.resolve(isAuth);
           })
@@ -332,7 +333,6 @@ router.post('/transaction/authorization', async (req, res) => {
     if (unitNum) {
       try {
         let id = new ObjectID(unitNum);
-        
         return await isSessionAuth('unit_num', unitNum, type)
           .then(isAuth => {
             return Promise.resolve(isAuth);
@@ -373,7 +373,9 @@ router.post('/transaction/authorization', async (req, res) => {
       .then(async rentalData => {
         let sessionId = null;
         if(rentalData){
-          sessionId = rentalData.session_id.toString();
+          try{
+            sessionId = rentalData.session_id.toString();
+          }catch(e){}
         }
         if(sessionId){
           try {
@@ -450,11 +452,12 @@ router.post('/transaction/authorization', async (req, res) => {
         if([activityObj.RENT_AUTH,
             activityObj.RENT_SESSION,
             activityObj.RESERVE_AUTH,
-            activityObj.RESERVE_SESSION
+            activityObj.RESERVE_SESSION,
+            activityObj.OVERDUE_AUTH,
+            activityObj.OVERDUE_SESSION,
           ].includes(type)){
           isAuth = isAvailable;
-        }else if([activityObj.OVERDUE_AUTH,
-          activityObj.OVERDUE_SESSION,
+        }else if([
           activityObj.EXTEND_AUTH,
           activityObj.EXTEND_SESSION
           ].includes(type)){
@@ -464,7 +467,7 @@ router.post('/transaction/authorization', async (req, res) => {
           let apiCode = 0;
           if(idKey == 'unit_num'){
             apiCode = 1;
-          }else if(idKey == 'id_num'){
+          }else if(idKey == 'user_num'){
             apiCode = 2;
           }
           apiCodes.push(apiCode);
@@ -497,7 +500,6 @@ router.post('/transaction/authorization', async (req, res) => {
       sessionId = SESSION_ID;
     }
 
-    console.log(sessionId);
     activityLogs.insertOne({
       'type': transActivityType,
       'date': currTime,
@@ -701,14 +703,14 @@ router.post('/transaction/session', async (req, res) => {
                       .then(async resData => {
                         currEndTime = resData.curr_end_time;
                         sessionId = resData.session_id;
-
                         if(currEndTime){
+                          let newEndTime = currEndTime + sessionDurationSeconds;
                           return await sessionLogs
                             .updateOne({
-                              '_id': sessionId
+                              '_id': new ObjectID(sessionId.toString())
                             }, {
                               $set: {
-                                'end_date': currEndTime + sessionDurationSeconds
+                                'end_date': newEndTime
                               }
                             })
                             .then(data => {
@@ -790,16 +792,58 @@ router.post('/transaction/session', async (req, res) => {
 
 router.post('/transaction/end', async (req, res) => {
   const rentalInfos = await loadCollections('Rental_Unit_Info');
+  const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
+  const currTime = Math.floor((new Date).getTime()/1000);
 
   const unitNum = req.body.unit_num || null;
-  const userNum = req.decoded.user_num || null;
+  const userNum = req.decoded.id_num || null;
+
+  let body = {};
 
   !unitNum ? body.constructError(01, `Unit ID parameter is required.`) : null;
 
   if(unitNum){
-    
-  }
+    await getCurrentSessionMatchId(userNum, unitNum)
+      .then(async data => {
+        if(data){
+          let bodyData = {
+            'msg': 'Your session has been terminated.'
+          };
+          let sessionId = data;
 
+          await rentalInfos
+            .updateOne({
+              'unit_num': unitNum
+            }, {
+              $set: {
+                'mode': 'available',
+                'user_num': null,
+                'session_id': null
+              }
+            })
+            .then(async data => {
+              await unitActivityLogs
+                .insertOne({
+                  'type': activityObj.END_SESSION,
+                  'date': currTime,
+                  'authorized': true,
+                  'authenticated': true,
+                  'session_id': sessionId
+                })
+              body.data = bodyData;
+              body.success = true;
+              res.send(body);
+            })
+        }else{
+          body.constructError(4, 'Session has already ended.');
+          res.send(body);
+        }
+      })
+      .catch(err => {
+        body.constructError(02, err);
+        res.send(body);
+      })
+  }
 })
 
 // isFeedAuthorized checks for the authorization in Unit Activity Log 
@@ -923,9 +967,59 @@ async function getSessionByRentalUnit(unitNum){
   }
 }
 
-async function isCurrentSessionMatch(userNum, unitNum){
+// Returns the session id with matching user num from the rental unit info if the session is on going.
+async function getCurrentSessionMatchId(userNum, unitNum){
+  const rentalInfos = await loadCollections('Rental_Unit_Info');
+  const sessionLogs = await loadCollections('Session_Log');
+  const currTime = Math.floor((new Date).getTime()/1000);
 
+  if(!!(userNum && unitNum)){
+    return await rentalInfos
+      .findOne({
+        'unit_num': unitNum
+      })
+      .then(data => {
+        if(data){
+          try{
+            let sessionId = data.session_id;
+            return Promise.resolve(sessionId);
+          }catch(e){
+            return Promise.reject('Session ID not found on rental unit.');
+          }
+        }else{
+          return Promise.reject('Rental unit not found.');
+        }
+      })
+      .catch(err => {
+        return Promise.reject(err);  
+      })
+      .then(async sessionId => {
+        return await verifyObjectId(sessionId)
+          .then(async id => {
+            return await sessionLogs
+              .findOne({
+                '_id': id,
+                'user_num': userNum
+              })
+              .then(data => {
+                if(data){
+                  let sessionEndTime = parseFloat(data.end_date);
+                  if((sessionEndTime - currTime) > 0){  
+                    return Promise.resolve(sessionId);
+                  }else{
+                    return Promise.resolve(false);
+                  }
+                }else{
+                  return Promise.reject('ID number does not match with that of session log\'s');
+                }
+              })
+              .catch(err => {
+                console.error(err);
+                return Promise.reject(err);
+              })
+          })
+      })
+  }
 }
-
 
 module.exports = router;
