@@ -1,7 +1,7 @@
 const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
-const serverUrl = '192.168.254.100';
+const serverUrl = '192.168.254.105';
 const serverPort = 27017;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
@@ -279,6 +279,8 @@ router.post('/transaction/authorization', async (req, res) => {
 
   let transActivityType = null;
 
+  let SESSION_ID;
+
   switch (transactionType) {
     case 'rent':
       transActivityType = activityObj.RENT_AUTH;
@@ -313,12 +315,12 @@ router.post('/transaction/authorization', async (req, res) => {
             return Promise.resolve(isAuth);
           })
           .catch(err => {
-            return Promise.reject(false);
+            return Promise.reject(err);
           })
 
       } catch (error) {
         body.constructError(3.2, 'Please encode a valid User ID format and value.');
-        return Promise.reject(false);
+        return Promise.reject('Invalid user id');
       }
     } else {
       body.constructError(1.2, `User ID parameter is required.`);
@@ -333,7 +335,6 @@ router.post('/transaction/authorization', async (req, res) => {
         
         return await isSessionAuth('unit_id', unitId, type)
           .then(isAuth => {
-            console.log('auth', isAuth);
             return Promise.resolve(isAuth);
           })
           .catch(err => {
@@ -367,24 +368,29 @@ router.post('/transaction/authorization', async (req, res) => {
   async function isSessionAvailable(idKey, idValue, type){
     queryObj = {};
     queryObj[idKey] = idValue;
-    
     return await rentalInfos
       .findOne(queryObj)
       .then(async rentalData => {
-        let sessionId = rentalData.session_id || null;
+        let sessionId = null;
+        if(rentalData){
+          sessionId = rentalData.session_id;
+        }
         if(sessionId){
           try {
             let objectId = new ObjectID(sessionId);
             
             if (!!rentalData) {
-              if(['occupied', 'reserved'].includes(rentalData.mode)){
+              if(['occupied', 'reserved'].includes(rentalData.mode)){ 
                 return await sessionLogs
                   .findOne({
-                    '_id': objectId
+                    '_id': objectId,
                   })
                   .then(async sessionData => {
                     let sessionEndTime = parseFloat(sessionData.end_date);
                     if((sessionEndTime - currTime) > 0){  
+                      if(!SESSION_ID){
+                        SESSION_ID = sessionId;
+                      }
                       return Promise.resolve(false);
                     }else{
                       await rentalInfos
@@ -392,7 +398,9 @@ router.post('/transaction/authorization', async (req, res) => {
                           queryObj
                         , {
                           $set: {
-                            "mode": "available"
+                            "mode": "available",
+                            "session_id": null,
+                            "user_id": null
                           }
                         })
                       return Promise.resolve(true);
@@ -405,7 +413,6 @@ router.post('/transaction/authorization', async (req, res) => {
               return Promise.resolve(true);
             }
           } catch (error) {
-            console.log(error);
             body.constructError(03, `Please encode a valid Session ID format and value.`);
             return Promise.resolve(false);
           }
@@ -431,7 +438,6 @@ router.post('/transaction/authorization', async (req, res) => {
   async function isSessionAuth(idKey, idValue, type){
     return await isSessionAvailable(idKey, idValue, type)
       .then(isAvailable => {
-        let isAuth;
         if([activityObj.RENT_AUTH,
             activityObj.RENT_SESSION,
             activityObj.RESERVE_AUTH,
@@ -474,38 +480,12 @@ router.post('/transaction/authorization', async (req, res) => {
 
     var sessionId = null;
 
-    // if([
-    //   activityObj.EXTEND_AUTH, 
-    //   activityObj.OVERDUE_AUTH, 
-    //   activityObj.EXTEND_SESSION,
-    //   activityObj.OVERDUE_SESSION]
-    // .includes(transActivityType)){
-    //   sessionId = await getSession(userId, unitId)
-    //     .catch(e => {
-    //       console.error(e);
-    //     })
-    // }
-
-    switch (transactionType) {
-      case 'rent_auth':
-        transActivityType = activityObj.RENT_SESSION;
-        
-        break;
-  
-      case 'extend_auth':
-        transActivityType = activityObj.EXTEND_SESSION;
-        break;
-  
-      case 'overdue_auth':
-        transActivityType = activityObj.OVERDUE_SESSION;
-        break;
-  
-      case 'reserve_auth':
-        transActivityType = activityObj.RESERVE_SESSION;
-        break;
-  
-      default:
-        break;
+    if([activityObj.OVERDUE_AUTH,
+      activityObj.OVERDUE_SESSION,
+      activityObj.EXTEND_AUTH,
+      activityObj.EXTEND_SESSION
+      ].includes(transActivityType)){
+      sessionId = SESSION_ID;
     }
 
     activityLogs.insertOne({
@@ -649,9 +629,6 @@ router.post('/transaction/session', async (req, res) => {
           let transActivityType = null;
 
           async function updateSession(){
-            if(transactionType == 'rent_auth'){
-              
-            }
             switch (transactionType) {
               case 'rent_auth':
                 transActivityType = activityObj.RENT_SESSION;
@@ -680,7 +657,8 @@ router.post('/transaction/session', async (req, res) => {
                       }, {
                         $set: {
                           'mode': 'occupied',
-                          'session_id': id
+                          'session_id': id,
+                          'user_id': userId
                         }
                       })
                       return Promise.resolve(id);
@@ -761,8 +739,6 @@ router.post('/transaction/session', async (req, res) => {
 
           await updateSession()
             .then(async id => {
-              console.log(id);
-
               await unitActivityLogs
                 .insertOne({
                   'type': transActivityType,
