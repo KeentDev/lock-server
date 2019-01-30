@@ -4,7 +4,7 @@ const ObjectID = require('mongodb').ObjectID;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
-const serverUrl = '192.168.254.105';
+const serverUrl = 'localhost';
 const serverPort = 27017;
 
 const router = express.Router();
@@ -79,7 +79,7 @@ router.post('/rfid/auth', async (req, res) => {
           res.send(body);
         } else {
           const payload = {
-            'user_id': data.user_id
+            'id_num': data.id_num
           };
 
           const token = jwt.sign(payload, config.secret, {

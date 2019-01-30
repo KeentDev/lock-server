@@ -1,7 +1,7 @@
 const express = require('express');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
-const serverUrl = '192.168.254.105';
+const serverUrl = 'localhost';
 const serverPort = 27017;
 const jwt = require('jsonwebtoken');
 const config = require('../config');
@@ -273,8 +273,8 @@ router.post('/transaction/authorization', async (req, res) => {
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   const sessionLogs = await loadCollections('Session_Log');
 
-  const unitId = req.body.unit_id || null;
-  const userId = req.decoded.user_id || null;
+  const unitNum = req.body.unit_num || null;
+  const userNum = req.decoded.id_num || null;
   const transactionType = req.body.transaction_type || null;
 
   let transActivityType = null;
@@ -305,12 +305,12 @@ router.post('/transaction/authorization', async (req, res) => {
   let apiCodes = [];
   let body = {};
 
-  async function isUserAuthorized(userId, type) {
-    if (userId) {
+  async function isUserAuthorized(userNum, type) {
+    if (userNum) {
       try {
-        let id = new ObjectID(userId);
+        let id = new ObjectID(userNum);
 
-        return await isSessionAuth('user_id', userId, type)
+        return await isSessionAuth('id_num', userNum, type)
           .then(isAuth => {
             return Promise.resolve(isAuth);
           })
@@ -328,12 +328,12 @@ router.post('/transaction/authorization', async (req, res) => {
     }
   }
 
-  async function isUnitAuthorized(unitId, type) {
-    if (unitId) {
+  async function isUnitAuthorized(unitNum, type) {
+    if (unitNum) {
       try {
-        let id = new ObjectID(unitId);
+        let id = new ObjectID(unitNum);
         
-        return await isSessionAuth('unit_id', unitId, type)
+        return await isSessionAuth('unit_num', unitNum, type)
           .then(isAuth => {
             return Promise.resolve(isAuth);
           })
@@ -373,7 +373,7 @@ router.post('/transaction/authorization', async (req, res) => {
       .then(async rentalData => {
         let sessionId = null;
         if(rentalData){
-          sessionId = rentalData.session_id;
+          sessionId = rentalData.session_id.toString();
         }
         if(sessionId){
           try {
@@ -386,13 +386,21 @@ router.post('/transaction/authorization', async (req, res) => {
                     '_id': objectId,
                   })
                   .then(async sessionData => {
-                    let sessionEndTime = parseFloat(sessionData.end_date);
-                    if((sessionEndTime - currTime) > 0){  
-                      if(!SESSION_ID){
-                        SESSION_ID = sessionId;
+                    if(sessionData){
+                      let sessionEndTime = parseFloat(sessionData.end_date);
+                      if((sessionEndTime - currTime) > 0){  
+                        if(!SESSION_ID){
+                          SESSION_ID = sessionId;
+                        }
+                        return Promise.resolve(false);
+                      }else{
+                        return await updataAvailableSession();
                       }
-                      return Promise.resolve(false);
                     }else{
+                      return await updataAvailableSession();
+                    }
+
+                    async function updataAvailableSession(){
                       await rentalInfos
                         .updateOne(
                           queryObj
@@ -400,11 +408,12 @@ router.post('/transaction/authorization', async (req, res) => {
                           $set: {
                             "mode": "available",
                             "session_id": null,
-                            "user_id": null
+                            "user_num": null
                           }
                         })
-                      return Promise.resolve(true);
+                    return Promise.resolve(true);
                     }
+                    
                   })
               }else if(rentalData.mode == 'available'){
                 return Promise.resolve(true);
@@ -453,9 +462,9 @@ router.post('/transaction/authorization', async (req, res) => {
         }
         if(!isAuth){
           let apiCode = 0;
-          if(idKey == 'unit_id'){
+          if(idKey == 'unit_num'){
             apiCode = 1;
-          }else if(idKey == 'user_id'){
+          }else if(idKey == 'id_num'){
             apiCode = 2;
           }
           apiCodes.push(apiCode);
@@ -468,8 +477,8 @@ router.post('/transaction/authorization', async (req, res) => {
   }
 
   await Promise.all([
-    isUnitAuthorized(unitId, transActivityType),
-    isUserAuthorized(userId, transActivityType),
+    isUnitAuthorized(unitNum, transActivityType),
+    isUserAuthorized(userNum, transActivityType),
     isTransactionTypeValid(transActivityType)
   ]).then(async auth => {
     const activityLogs = await loadCollections('Unit_Activity_Logs');
@@ -488,6 +497,7 @@ router.post('/transaction/authorization', async (req, res) => {
       sessionId = SESSION_ID;
     }
 
+    console.log(sessionId);
     activityLogs.insertOne({
       'type': transActivityType,
       'date': currTime,
@@ -522,77 +532,70 @@ router.post('/transaction/feed', async (req, res) => {
   const activityLogs = await loadCollections('Unit_Activity_Logs');
   const authLogId = req.body.auth_activity_log_id || null;
   const amount = req.body.transaction_amount || null;
-  const userId = req.decoded.user_id || null;
+  const userNum = req.decoded.id_num || null;
 
   let body = {};
-
   !amount ? body.constructError(01, `Amount parameter is required.`) : null;
-  !userId ? body.constructError(01, `User Id parameter is required.`) : null;
+  !userNum ? body.constructError(01, `User Id parameter is required.`) : null;
 
-  if (amount && userId) {
-    verifyObjectId(userId)
-      .then(async id => {
-        await isFeedAuthorized(authLogId, false)
-          .then(async authData => {
-            const isAuth = authData.isAuth;
-            const transactionType = authData.transactionType;
+  if (amount && userNum) {
+    await isFeedAuthorized(authLogId, false)
+      .then(async authData => {
+        const isAuth = authData.isAuth;
+        const transactionType = authData.transactionType;
 
-            async function isUpdateAuthorized() {
-              return new Promise(async (resolve, reject) => {
-                if (isAuth) {
-                  const transactionLogs = await loadCollections('Transaction_Log');
+        async function isUpdateAuthorized() {
+          return new Promise(async (resolve, reject) => {
+            if (isAuth) {
+              const transactionLogs = await loadCollections('Transaction_Log');
 
-                  await transactionLogs
-                    .insertOne({
-                      'type': transactionType,
-                      'amount': amount,
-                      'date': currTime,
-                      'activity_log_id': authLogId
-                    })
-                    .then(data => {
-                      resolve(data);
-                    })
-                    .catch(err => {
-                      reject(err);
-                    })
-                } else {
+              await transactionLogs
+                .insertOne({
+                  'type': transactionType,
+                  'amount': amount,
+                  'date': currTime,
+                  'activity_log_id': authLogId,
+                  'user_num': userNum
+                })
+                .then(data => {
+                  resolve(data);
+                })
+                .catch(err => {
                   reject(err);
+                })
+            } else {
+              reject(err);
+            }
+          })
+        }
+
+        body.data = {
+          'transaction_authorized': false,
+          'date': currTime
+        };
+        body.success = true;
+
+        isUpdateAuthorized()
+          .then(async result => {
+            body.data.transaction_authorized = true;
+            await activityLogs
+              .updateOne({
+                '_id': new ObjectID(authLogId)
+              }, {
+                $set: {
+                  "authenticated": true
                 }
               })
-            }
-
-            body.data = {
-              'transaction_authorized': false,
-              'date': currTime
-            };
-            body.success = true;
-
-            isUpdateAuthorized()
-              .then(async result => {
-                body.data.transaction_authorized = true;
-                await activityLogs
-                  .updateOne({
-                    '_id': new ObjectID(authLogId)
-                  }, {
-                    $set: {
-                      "authenticated": true
-                    }
-                  })
-                res.send(body);
-              })
-              .catch(err => {
-                console.error(err);
-                body.success = true;
-                res.send(body);
-              })
+            res.send(body);
           })
-          .catch(bodyError => {
-            res.send(bodyError);
+          .catch(err => {
+            console.error(err);
+            body.success = true;
+            res.send(body);
           })
       })
-      .catch(err => {
-        body.constructError(03, `Please encode a valid User ID format and value.`);
-        res.send(body);
+      .catch(bodyError => {
+        res.send(bodyError);
       })
   } else {
     res.send(body);
@@ -601,21 +604,21 @@ router.post('/transaction/feed', async (req, res) => {
 
 router.post('/transaction/session', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
-  const userId = req.decoded.user_id || null;
+  const userNum = req.decoded.id_num || null;
   const authLogId = req.body.auth_activity_log_id || null;
-  const unitId = req.body.unit_id || null;
+  const unitNum = req.body.unit_num || null;
   const sessionDuration = req.body.session_duration || null;
   const sessionDurationSeconds = sessionDuration * 60;
   const sessionEndDate = currTime + sessionDurationSeconds;
 
   let body = {};
 
-  !userId ? body.constructError(01, `User ID parameter is required.`) : null;
-  !unitId ? body.constructError(01, `Unit ID parameter is required.`) : null;
+  !userNum ? body.constructError(01, `User ID parameter is required.`) : null;
+  !unitNum ? body.constructError(01, `Unit ID parameter is required.`) : null;
   !authLogId ? body.constructError(01, `Authorization Log ID parameter is required.`) : null;
   !sessionDuration ? body.constructError(01, 'Session duration parameter is required.') : null;
 
-  if (userId && unitId && authLogId && sessionDuration) {
+  if (userNum && unitNum && authLogId && sessionDuration) {
     const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
 
     await isFeedAuthorized(authLogId, true)
@@ -636,14 +639,14 @@ router.post('/transaction/session', async (req, res) => {
                   .insertOne({
                     "start_date": currTime,
                     "end_date": sessionEndDate,
-                    "user_id": userId,
-                    "unit_id": unitId,
+                    "user_num": userNum,
+                    "unit_num": unitNum,
                   })
                   .then(async data => {
                     return await sessionLogs
                       .findOne({
-                        'user_id': userId,
-                        'unit_id': unitId
+                        'user_num': userNum,
+                        'unit_num': unitNum
                       })
                       .then(data => {
                         return Promise.resolve(data._id.toString());
@@ -653,12 +656,12 @@ router.post('/transaction/session', async (req, res) => {
                     const rentalInfos = await loadCollections('Rental_Unit_Info');
                     await rentalInfos
                       .updateOne({
-                        'unit_id': unitId
+                        'unit_num': unitNum
                       }, {
                         $set: {
                           'mode': 'occupied',
                           'session_id': id,
-                          'user_id': userId
+                          'user_num': userNum
                         }
                       })
                       return Promise.resolve(id);
@@ -669,10 +672,10 @@ router.post('/transaction/session', async (req, res) => {
               case 'extend_auth':
                 transActivityType = activityObj.EXTEND_SESSION;
 
-                return await getSessionByRentalUnit(unitId)
+                return await getSessionByRentalUnit(unitNum)
                   .then(async id => {
                     return await verifyObjectId(id)
-                      . then(async sessionId => {
+                      .then(async sessionId => {
                         return await sessionLogs
                           .findOne({
                             '_id': sessionId
@@ -680,7 +683,7 @@ router.post('/transaction/session', async (req, res) => {
                           .then(data => {
                             let currEndTime = data.end_date;
                             let resData = {
-                              'session_id': sessionId,
+                              'session_id': id,
                               'curr_end_time': currEndTime
                             }
                             return Promise.resolve(resData);
@@ -726,6 +729,8 @@ router.post('/transaction/session', async (req, res) => {
           
               case 'overdue_auth':
                 transActivityType = activityObj.OVERDUE_SESSION;
+
+
                 break;
           
               case 'reserve_auth':
@@ -782,6 +787,20 @@ router.post('/transaction/session', async (req, res) => {
   }
 
 });
+
+router.post('/transaction/end', async (req, res) => {
+  const rentalInfos = await loadCollections('Rental_Unit_Info');
+
+  const unitNum = req.body.unit_num || null;
+  const userNum = req.decoded.user_num || null;
+
+  !unitNum ? body.constructError(01, `Unit ID parameter is required.`) : null;
+
+  if(unitNum){
+    
+  }
+
+})
 
 // isFeedAuthorized checks for the authorization in Unit Activity Log 
 async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
@@ -874,14 +893,14 @@ async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
   }
 }
 
-async function getSessionByRentalUnit(unitId){
+async function getSessionByRentalUnit(unitNum){
   const sessionLogs = await loadCollections('Session_Log');
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   
-  if(unitId){
+  if(unitNum){
     return await rentalInfos
       .findOne({
-        'unit_id': unitId
+        'unit_num': unitNum
       })
       .then(result => {
         let sessionId = null;
@@ -902,6 +921,10 @@ async function getSessionByRentalUnit(unitId){
     console.error('Session with Unit ID is not found.');
     return Promise.reject(false);
   }
+}
+
+async function isCurrentSessionMatch(userNum, unitNum){
+
 }
 
 
