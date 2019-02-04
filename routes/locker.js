@@ -1,10 +1,5 @@
 const express = require('express');
-const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
-const serverUrl = 'localhost';
-const serverPort = 27017;
-const jwt = require('jsonwebtoken');
-const config = require('../config');
 
 const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
 const activityObj = {
@@ -22,83 +17,9 @@ const activityObj = {
 
 const router = express.Router();
 
-Object.prototype.constructError = function (errorCode, errorMsg) {
-  this.success = false;
-  if (!this.error_code) {
-    this.error_code = [];
-  }
-  this.error_code.push(errorCode);
-
-  if (!this.error_msg) {
-    this.error_msg = [];
-  }
-  this.error_msg.push(errorMsg);
-
-  if (errorCode === 02) {
-    console.error(`Server error: ${errorMsg}`);
-  }
-}
-
-Object.prototype.ObjectKeyMapper = function (oldKey, newKey) {
-  let value = this[oldKey];
-
-  delete this[oldKey];
-  this[newKey] = value;
-}
-
-async function verifyObjectId(id, label, index) {
-  return new Promise((resolve, reject) => {
-    try {
-      let objectId = new ObjectID(id);
-
-      resolve(objectId);
-    } catch (error) {
-      reject(error);
-    }
-
-  });
-}
-
-async function loadMongoDB() {
-  const client = await mongodb.MongoClient.connect(`mongodb://${serverUrl}:${serverPort}`, {
-    useNewUrlParser: true
-  });
-
-  return client;
-}
-
-async function loadCollections(collectionName) {
-  const client = await loadMongoDB();
-
-  return client.db('Thesis').collection(collectionName);
-}
-
-router.use((req, res, next) => {
-  const token = req.body.token || req.query.token || req.headers['x-access-token'];
-
-  let body = {};
-
-  if(token) {
-    jwt.verify(token, config.secret, (err, decoded) => {
-      if(err) {
-        body.constructError(05, 'Failed to authenticate');
-        return res.send(body);
-      }else {
-        req.decoded = decoded;
-        next();
-      }
-    })
-  }else {
-    body.constructError(05, 'Please encode a valid token');
-
-    return res.status(403).send(body);
-  }
-
-});
-
 router.get('/esp-test', async (req, res) => {
   console.log('connection success');
-  res.status(200).send('test');
+  res.send('test');
 });
 
 router.post('/esp-test', async (req, res) => {
@@ -272,11 +193,16 @@ router.get('/suggest-unit', async (req, res) => {
 router.post('/transaction/authorization', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const sessionLogs = await loadCollections('Session_Log');
 
   const unitNum = req.body.unit_num || null;
   const userNum = req.decoded.id_num || null;
   const transactionType = req.body.transaction_type || null;
+
+  let apiCodes = [];
+  let body = {};
+
+  !userNum ? body.constructError(1.2, `User Id parameter is required.`) : null;
+  !unitNum ? body.constructError(1.1, `Unit Id parameter is required.`) : null;
 
   let transActivityType = null;
 
@@ -301,54 +227,197 @@ router.post('/transaction/authorization', async (req, res) => {
 
     default:
       break;
-  }
-
-  let apiCodes = [];
-  let body = {};
+  } 
 
   async function isUserAuthorized(userNum, type) {
-    if (userNum) {
-      try {
-        let id = new ObjectID(userNum);
-
-        return await isSessionAuth('user_num', userNum, type)
-          .then(isAuth => {
-            return Promise.resolve(isAuth);
+    if(userNum){
+      if([activityObj.RENT_AUTH,
+        activityObj.RESERVE_AUTH
+        ].includes(type)){
+          return await rentalInfos 
+            .findOne({
+              'user_num': userNum
+            })
+            .then(result => {
+              let isAuth = false;
+              if(result){
+                isAuth = false;
+                apiCodes.push(1);
+              }else{
+                isAuth = true;
+              }
+              return Promise.resolve(isAuth);
+            })
+            .catch(err => {
+              return Promise.reject(err);
+            })
+      }else if(type == activityObj.EXTEND_AUTH){
+        return await getCurrentSessionMatchId(userNum, unitNum, true)
+          .then(async sessionId => {
+            if(!!sessionId){
+              return Promise.resolve(true);
+            }else{
+              return Promise.resolve(false);
+            }
           })
           .catch(err => {
+            let errMsg;
+            switch (err) {
+              case 1:
+                errMsg = 'Invalid Session ID format from rental record.'
+                break;
+              case 2:
+                errMsg = 'Session record does not exist.'
+                break;
+              case 3:
+                errMsg = 'Rental session does not exist.'
+                break;
+              default:
+                break;
+            }
+            body.constructError(4, errMsg);
             return Promise.reject(err);
           })
-
-      } catch (error) {
-        body.constructError(3.2, 'Please encode a valid User ID format and value.');
-        return Promise.reject('Invalid user id');
+      }else if(type == activityObj.OVERDUE_AUTH){
+        return await getCurrentSessionMatchId(userNum, unitNum, false, true)
+          .then(async timeLeft => {
+            if(!!timeLeft){
+              let overdueTime = 432000; // 5 days
+              if((timeLeft * -1) >= overdueTime){
+                apiCodes.push(1);
+                return Promise.resolve(false);
+              }
+              return Promise.resolve(true);
+            }else{
+              return Promise.resolve(false);
+            }
+          })
+          .catch(err => {
+            let errMsg;
+            switch (err) {
+              case 1:
+                errMsg = 'Invalid Session ID format from rental record.'
+                break;
+              case 2:
+                errMsg = 'Session record does not exist.'
+                break;
+              case 3:
+                errMsg = 'Rental session does not exist.'
+                break;
+              default:
+                break;
+            }
+            body.constructError(4, errMsg);
+            return Promise.reject(err);
+          })
+      }else {
+        let errorMsg = 'Transaction type is required.';
+        body.constructError(1.2, errorMsg);
+        return Promise.reject(errorMsg);
       }
-    } else {
-      body.constructError(1.2, `User ID parameter is required.`);
-      return Promise.reject(false);
+    }else{
+      return Promise.resolve(false);
     }
   }
 
   async function isUnitAuthorized(unitNum, type) {
-    if (unitNum) {
-      try {
-        let id = new ObjectID(unitNum);
-        return await isSessionAuth('unit_num', unitNum, type)
-          .then(isAuth => {
-            return Promise.resolve(isAuth);
+    if(unitNum){
+      if([activityObj.RENT_AUTH,
+        activityObj.RESERVE_AUTH
+        ].includes(type)){
+          return await rentalInfos 
+            .findOne({
+              'unit_num': unitNum,
+            })
+            .then(result => {
+              let isAuth = false;
+              console.log(result);
+              if(result){
+                let mode = result.mode;
+  
+                if(mode == 'available'){
+                  isAuth = true;
+                }else{
+                  isAuth = false;
+                  apiCodes.push(2);
+                }
+              }else{
+                apiCodes.push(2);
+                isAuth = false;
+              }
+              return Promise.resolve(isAuth);
+            })
+            .catch(err => {
+              return Promise.reject(err);
+            })
+      }else if(type == activityObj.EXTEND_AUTH){
+        return await getCurrentSessionMatchId(userNum, unitNum, true)
+          .then(async sessionId => {
+            if(!!sessionId){
+              return Promise.resolve(true);
+            }else{
+              return Promise.resolve(false);
+            }
           })
           .catch(err => {
-            return Promise.reject(false);
+            let errMsg;
+            switch (err) {
+              case 1:
+                errMsg = 'Invalid Session ID format from rental record.'
+                break;
+              case 2:
+                errMsg = 'Session record does not exist.'
+                break;
+              case 3:
+                errMsg = 'Rental session does not exist.'
+                break;
+              default:
+                break;
+            }
+            body.constructError(4, errMsg);
+            return Promise.reject(err);
           })
-        
-      } catch (error) {
-        body.constructError(3.1, 'Please encode a valid Unit ID format and value.');
-        return Promise.reject(false);
+      }else if(type == activityObj.OVERDUE_AUTH){
+        return await getCurrentSessionMatchId(userNum, unitNum, false, true)
+          .then(async timeLeft => {
+            if(!!timeLeft){
+              let overdueTime = 432000; // 5 days
+              if((timeLeft * -1) >= overdueTime){
+                apiCodes.push(1);
+                return Promise.resolve(false);
+              }
+              return Promise.resolve(true);
+            }else{
+              return Promise.resolve(false);
+            }
+          })
+          .catch(err => {
+            let errMsg;
+            switch (err) {
+              case 1:
+                errMsg = 'Invalid Session ID format from rental record.'
+                break;
+              case 2:
+                errMsg = 'Session record does not exist.'
+                break;
+              case 3:
+                errMsg = 'Rental session does not exist.'
+                break;
+              default:
+                break;
+            }
+            body.constructError(4, errMsg);
+            return Promise.reject(err);
+          })
+      }else {
+        let errorMsg = 'Transaction type is required.';
+        body.constructError(1.2, errorMsg);
+        return Promise.reject(errorMsg);
       }
-    } else {
-      body.constructError(1.1, 'Unit ID parameter is required.');
-      return Promise.reject(false);
+    }else{
+      return Promise.resolve(false);
     }
+    
   }
 
   async function isTransactionTypeValid(transactionType) {
@@ -365,131 +434,16 @@ router.post('/transaction/authorization', async (req, res) => {
     }
   }
 
-  async function isSessionAvailable(idKey, idValue, type){
-    queryObj = {};
-    queryObj[idKey] = idValue;
-    return await rentalInfos
-      .findOne(queryObj)
-      .then(async rentalData => {
-        let sessionId = null;
-        if(rentalData){
-          try{
-            sessionId = rentalData.session_id.toString();
-          }catch(e){}
-        }
-        if(sessionId){
-          try {
-            let objectId = new ObjectID(sessionId);
-            
-            if (!!rentalData) {
-              if(['occupied', 'reserved'].includes(rentalData.mode)){ 
-                return await sessionLogs
-                  .findOne({
-                    '_id': objectId,
-                  })
-                  .then(async sessionData => {
-                    if(sessionData){
-                      let sessionEndTime = parseFloat(sessionData.end_date);
-                      if((sessionEndTime - currTime) > 0){  
-                        if(!SESSION_ID){
-                          SESSION_ID = sessionId;
-                        }
-                        return Promise.resolve(false);
-                      }else{
-                        return await updataAvailableSession();
-                      }
-                    }else{
-                      return await updataAvailableSession();
-                    }
-
-                    async function updataAvailableSession(){
-                      await rentalInfos
-                        .updateOne(
-                          queryObj
-                        , {
-                          $set: {
-                            "mode": "available",
-                            "session_id": null,
-                            "user_num": null
-                          }
-                        })
-                    return Promise.resolve(true);
-                    }
-                    
-                  })
-              }else if(rentalData.mode == 'available'){
-                return Promise.resolve(true);
-              } 
-            } else {
-              return Promise.resolve(true);
-            }
-          } catch (error) {
-            body.constructError(03, `Please encode a valid Session ID format and value.`);
-            return Promise.resolve(false);
-          }
-        }else{
-          if([activityObj.RENT_AUTH,
-            activityObj.RENT_SESSION,
-            activityObj.RESERVE_AUTH,
-            activityObj.RESERVE_SESSION
-          ].includes(type)){
-            return Promise.resolve(true);
-          }else{
-            body.constructError(1.2, `Session ID parameter is required.`);
-            return Promise.reject(false);
-          }
-        }
-      })
-      .catch(err => {
-        body.constructError(02, err);
-        return Promise.reject(false);
-      });
-  }
-
-  async function isSessionAuth(idKey, idValue, type){
-    return await isSessionAvailable(idKey, idValue, type)
-      .then(isAvailable => {
-        if([activityObj.RENT_AUTH,
-            activityObj.RENT_SESSION,
-            activityObj.RESERVE_AUTH,
-            activityObj.RESERVE_SESSION,
-            activityObj.OVERDUE_AUTH,
-            activityObj.OVERDUE_SESSION,
-          ].includes(type)){
-          isAuth = isAvailable;
-        }else if([
-          activityObj.EXTEND_AUTH,
-          activityObj.EXTEND_SESSION
-          ].includes(type)){
-          isAuth = !isAvailable;
-        }
-        if(!isAuth){
-          let apiCode = 0;
-          if(idKey == 'unit_num'){
-            apiCode = 1;
-          }else if(idKey == 'user_num'){
-            apiCode = 2;
-          }
-          apiCodes.push(apiCode);
-        }
-        return Promise.resolve(isAuth);
-      })
-      .catch(err => {
-        return Promise.reject(false);
-      });
-  }
-
   await Promise.all([
-    isUnitAuthorized(unitNum, transActivityType),
     isUserAuthorized(userNum, transActivityType),
+    isUnitAuthorized(unitNum, transActivityType),
     isTransactionTypeValid(transActivityType)
   ]).then(async auth => {
     const activityLogs = await loadCollections('Unit_Activity_Logs');
 
-    let unitAuthorized = auth[0];
-    let userAuthorized = auth[1];
+    let unitAuthorized = auth[1];
+    let userAuthorized = auth[0];
     let rentAuthorized = await unitAuthorized && await userAuthorized;
-
     var sessionId = null;
 
     if([activityObj.OVERDUE_AUTH,
@@ -591,7 +545,6 @@ router.post('/transaction/feed', async (req, res) => {
             res.send(body);
           })
           .catch(err => {
-            console.error(err);
             body.success = true;
             res.send(body);
           })
@@ -648,7 +601,9 @@ router.post('/transaction/session', async (req, res) => {
                     return await sessionLogs
                       .findOne({
                         'user_num': userNum,
-                        'unit_num': unitNum
+                        'unit_num': unitNum,
+                        "start_date": currTime,
+                        "end_date": sessionEndDate
                       })
                       .then(data => {
                         return Promise.resolve(data._id.toString());
@@ -803,13 +758,13 @@ router.post('/transaction/end', async (req, res) => {
   !unitNum ? body.constructError(01, `Unit ID parameter is required.`) : null;
 
   if(unitNum){
-    await getCurrentSessionMatchId(userNum, unitNum)
+    await getCurrentSessionMatchId(userNum, unitNum, true, null, true)
       .then(async data => {
         if(data){
           let bodyData = {
             'msg': 'Your session has been terminated.'
           };
-          let sessionId = data;
+          let sessionId = data.toString();
 
           await rentalInfos
             .updateOne({
@@ -938,7 +893,6 @@ async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
 }
 
 async function getSessionByRentalUnit(unitNum){
-  const sessionLogs = await loadCollections('Session_Log');
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   
   if(unitNum){
@@ -968,7 +922,7 @@ async function getSessionByRentalUnit(unitNum){
 }
 
 // Returns the session id with matching user num from the rental unit info if the session is on going.
-async function getCurrentSessionMatchId(userNum, unitNum){
+async function getCurrentSessionMatchId(userNum, unitNum, onGoing, returnTimeLeft = false, ongGoingOpt = false){
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   const sessionLogs = await loadCollections('Session_Log');
   const currTime = Math.floor((new Date).getTime()/1000);
@@ -976,48 +930,63 @@ async function getCurrentSessionMatchId(userNum, unitNum){
   if(!!(userNum && unitNum)){
     return await rentalInfos
       .findOne({
-        'unit_num': unitNum
+        'user_num': userNum,
+        'unit_num': unitNum,
+        'mode': {
+          $in: ['occupied', 'reserve']
+        }
       })
-      .then(data => {
-        if(data){
+      .then(result => {
+        if(result){
+          let sessionId = null;
+
           try{
-            let sessionId = data.session_id;
+            sessionId = result.session_id;
+            sessionId = new ObjectID(sessionId);
+
             return Promise.resolve(sessionId);
-          }catch(e){
-            return Promise.reject('Session ID not found on rental unit.');
+          }catch(err){
+            return Promise.reject(1);
           }
         }else{
-          return Promise.reject('Rental unit not found.');
+          return Promise.resolve(false);
         }
       })
       .catch(err => {
-        return Promise.reject(err);  
+        return Promise.reject(err);
       })
       .then(async sessionId => {
-        return await verifyObjectId(sessionId)
-          .then(async id => {
-            return await sessionLogs
-              .findOne({
-                '_id': id,
-                'user_num': userNum
-              })
-              .then(data => {
-                if(data){
-                  let sessionEndTime = parseFloat(data.end_date);
-                  if((sessionEndTime - currTime) > 0){  
-                    return Promise.resolve(sessionId);
-                  }else{
-                    return Promise.resolve(false);
-                  }
+        if(!!sessionId){
+          return await sessionLogs
+            .findOne({
+              '_id': sessionId
+            })
+            .then(result => {
+              if(result){
+                let sessionEndTime = parseFloat(result.end_date);
+                let resolveData;
+                let timeLeft = sessionEndTime - currTime;
+                if((timeLeft > 0) && onGoing || ongGoingOpt){
+                  resolveData = sessionId;
+                }else if((timeLeft <= 0) && !onGoing || ongGoingOpt){
+                  resolveData = sessionId;
                 }else{
-                  return Promise.reject('ID number does not match with that of session log\'s');
+                  resolveData = false;
                 }
-              })
-              .catch(err => {
-                console.error(err);
-                return Promise.reject(err);
-              })
-          })
+                if(!!resolveData && returnTimeLeft){
+                  resolveData = timeLeft;
+                }
+                return Promise.resolve(resolveData);
+              }else{
+                return Promise.reject(2);
+              }
+            })
+        }else{
+          return Promise.reject(3);
+        }
+      })
+      .catch(err => {
+        return Promise.reject(err);
       })
   }
 }
