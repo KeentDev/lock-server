@@ -17,11 +17,6 @@ const activityObj = {
 
 const router = express.Router();
 
-router.get('/esp-test', async (req, res) => {
-  console.log('connection success');
-  res.send('test');
-});
-
 router.post('/esp-test', async (req, res) => {
   let body = req.body.data;
   console.log('connection success');
@@ -331,7 +326,6 @@ router.post('/transaction/authorization', async (req, res) => {
             })
             .then(result => {
               let isAuth = false;
-              console.log(result);
               if(result){
                 let mode = result.mode;
   
@@ -736,8 +730,9 @@ router.post('/transaction/session', async (req, res) => {
         }
       })
       .catch(err => {
-          body.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
-          res.send(err);
+        console.error(err);
+        body.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
+        res.send(err);
       })
   }else{
     res.send(body);
@@ -880,7 +875,7 @@ async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
         })
         .catch(err => {
           let bodyError = {};
-
+          console.error(err);
           bodyError.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
           reject(bodyError);
         })

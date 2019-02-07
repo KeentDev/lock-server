@@ -4,8 +4,12 @@ const cors = require('cors');
 const morgan = require('morgan');
 const config = require('./config');
 const mongodb = require('mongodb');
-const serverUrl = 'localhost';
-const serverPort = 27017;
+const ObjectID = require('mongodb').ObjectID;
+let serverUrl;
+let serverPort;
+
+global.serverUrl = 'localhost';
+global.serverPort = 27017;
 
 const app = express();
 
@@ -15,15 +19,16 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({extended: false}));
 app.use(cors());
 
-app.use(morgan('dev'));
+app.use(morgan(':remote-addr :remote-user :method :url HTTP/:http-version :status :res[content-length] - :response-time ms'));
 
 const rootApi = require('./routes/root');
 const user = require('./routes/user');
 const locker = require('./routes/locker');
-// const statistics = require('./routes/statistics');
+const statistics = require('./routes/statistics');
 
 global.loadMongoDB = async function() {
-  const client = mongodb.MongoClient.connect(`mongodb://${serverUrl}:${serverPort}`, {
+  console.log(serverUrl, serverPort);
+  const client = mongodb.MongoClient.connect(`mongodb://${this.serverUrl}:${this.serverPort}`, {
     useNewUrlParser: true
   });
 
@@ -75,7 +80,7 @@ global.verifyObjectId = function(id) {
 app.use('/', rootApi);
 app.use('/user', user);
 app.use('/locker', locker);
-// app.use('/stats', statistics);
+app.use('/stats', statistics);
 
 const port = process.env.PORT || 5000;
 

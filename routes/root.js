@@ -22,26 +22,31 @@ router.post('/rfid/auth', async (req, res) => {
       .then(data => {
         let body = {};
         let bodyData = {};
-
-        if (data.length <= 0) {
+        if(data){
+          if (data.length <= 0) {
+            body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
+            res.send(body);
+          } else {
+            const payload = {
+              'id_num': data.id_num
+            };
+  
+            const token = jwt.sign(payload, config.secret, {
+              expiresIn: '4hr' // expires in 24 hours
+            });
+  
+            bodyData.token = token;
+  
+            body.data = bodyData;
+            body.success = true;
+  
+            res.send(body);
+          }
+        }else{
           body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
           res.send(body);
-        } else {
-          const payload = {
-            'id_num': data.id_num
-          };
-
-          const token = jwt.sign(payload, config.secret, {
-            expiresIn: '4hr' // expires in 24 hours
-          });
-
-          bodyData.token = token;
-
-          body.data = bodyData;
-          body.success = true;
-
-          res.send(body);
         }
+        
       })
       .catch(err => {
         body.constructError(02, err);
@@ -52,6 +57,11 @@ router.post('/rfid/auth', async (req, res) => {
     res.send(body);
   }
   
+});
+
+router.get('/esp-test', async (req, res) => {
+  console.log('connection success');
+  res.send('test');
 });
 
 router.use((req, res, next) => {

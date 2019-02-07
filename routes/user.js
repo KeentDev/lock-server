@@ -48,15 +48,15 @@ router.get('/list', async (req, res) => {
     
 router.get('/profile', async (req, res) => {
   const users = await loadCollections('Student_DB');
-  const studentId = req.body.student_id || null;
-  const userId = req.body.user_id || null;
+  const studentId = parseInt(req.body.student_id || req.query.student_id) || null;
+  const userId = parseInt(req.body.user_id || req.query.user_id) || null;
 
   let body = {};
 
   fetchProfile = async () => {
     return new Promise(async (resolve, reject) => {
       if (studentId) {
-        await users.find({
+        await users.findOne({
             'id_num': studentId
           }, {
             projection: {
@@ -64,9 +64,8 @@ router.get('/profile', async (req, res) => {
               'password': 0
             }
           })
-          .toArray()
           .then(data => {
-            if (data.length > 0) {
+            if (data) {
               body.data = data;
               body.success = true;
             } else {
@@ -318,5 +317,18 @@ router.get('/do/profile', async (req, res) => {
     res.send(body);
   }
 })
+
+router.get('/transaction-logs', async (req, res) => {
+  const transactionLogs = await loadCollections('Transaction_Log');
+  const userNum = req.body.user_num || req.query.user_num || null;
+  const page_cursor = req.body.page_cursor || req.query.page_cursor || 1;
+  const page_size = req.body.page_size || req.body.page_size || 0;
+  const skip_items = (page_cursor - 1) * page_size;
+
+  let body = {};
+
+  !userNum ? body.constructError(1.2, `Student ID parameter is required.`) : null;
+
+});
 
 module.exports = router;
