@@ -17,17 +17,15 @@ const activityObj = {
 
 const router = express.Router();
 
-router.post('/esp-test', async (req, res) => {
-  let body = req.body.data;
-  console.log('connection success');
-  res.status(200).send(JSON.stringify(body));
-});
-
 router.get('/unit-list', async (req, res) => {
   const lockers = await loadCollections('Locker_Units');
   const area = req.body.area_num || null;
 
   let body = {};
+
+  const page_cursor = req.body.page_cursor || req.query.page_cursor || 1;
+  const page_size = req.body.page_size || req.query.page_size || 0;
+  const skip_items = (page_cursor - 1) * page_size;
 
   if (area) {
     await lockers
@@ -115,18 +113,20 @@ router.get('/area-info', async (req, res) => {
             res.send(body);
           }else{
             body.constructError(00, `Found no information available on area ID ${id}.`);
+            return Promise.reject();
           }
-          res.send(body);
         })
         .catch(err => {
           body.constructError(02, err);
-          res.send(body);
+          return Promise.reject();
         })
       })
       .catch(err => {
         console.error(err);
         body.constructError(03, `Please encode a valid Area ID format and value.`);
+        console.log(body)
         res.send(body);
+        return Promise.resolve();
       });
   }else{
     body.constructError(01, 'Area ID parameter is required.');
@@ -189,9 +189,9 @@ router.post('/transaction/authorization', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const rentalInfos = await loadCollections('Rental_Unit_Info');
 
-  const unitNum = req.body.unit_num || null;
+  const unitNum = parseInt(req.body.unit_num) || parseInt(req.query.unit_num) || null;
   const userNum = req.decoded.id_num || null;
-  const transactionType = req.body.transaction_type || null;
+  const transactionType = req.body.transaction_type || req.query.transaction_type || null;
 
   let apiCodes = [];
   let body = {};
@@ -605,17 +605,52 @@ router.post('/transaction/session', async (req, res) => {
                   })
                   .then(async id => {
                     const rentalInfos = await loadCollections('Rental_Unit_Info');
-                    await rentalInfos
-                      .updateOne({
-                        'unit_num': unitNum
-                      }, {
-                        $set: {
-                          'mode': 'occupied',
-                          'session_id': id,
-                          'user_num': userNum
-                        }
+                    const lockers = await loadCollections('Locker_Units');
+
+                    await Promise.all([updateRental(), updateLocker()])
+                      .then(resolvePromises => {
+                        console.log('done');
+                        console.log(unitNum);
+                        return Promise.resolve(id);
                       })
-                      return Promise.resolve(id);
+                      .catch(err => {
+                        console.error(err);
+                      })
+
+                    async function updateRental() {
+                      return await rentalInfos
+                        .updateOne({
+                          'unit_num': unitNum
+                        }, {
+                          $set: {
+                            'mode': 'occupied',
+                            'session_id': id,
+                            'user_num': userNum
+                          }
+                        })
+                        .then(async result => {
+                          return Promise.resolve();
+                        })
+                        .catch(err => {
+                          return Promise.reject(err);
+                        })
+                    };
+                    async function updateLocker() {
+                      return await lockers
+                        .updateOne({
+                          'unit_number': unitNum
+                        }, {
+                          $set: {
+                            'unit_status': 'occupied',
+                          }
+                        })
+                        .then(result => {
+                          return Promise.resolve();
+                        })
+                        .catch(err => {
+                          return Promise.reject(err);
+                        })
+                    };
                   })
                 
                 break;
@@ -743,6 +778,7 @@ router.post('/transaction/session', async (req, res) => {
 router.post('/transaction/end', async (req, res) => {
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
+  const lockers = await loadCollections('Locker_Units');
   const currTime = Math.floor((new Date).getTime()/1000);
 
   const unitNum = req.body.unit_num || null;
@@ -760,7 +796,15 @@ router.post('/transaction/end', async (req, res) => {
             'msg': 'Your session has been terminated.'
           };
           let sessionId = data.toString();
-
+          
+          await lockers
+            .updateOne({
+              'unit_number': unitNum
+            }, {
+              $set: {
+                'unit_status': 'available',
+              }
+            })
           await rentalInfos
             .updateOne({
               'unit_num': unitNum

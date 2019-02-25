@@ -48,7 +48,7 @@ router.get('/transaction/summary', async (req, res) => {
 })
 
 router.get('/transaction/college', async (req, res) => {
-  let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZF9udW0iOjE0MjE2MTYsImlhdCI6MTU0OTUxNTY3MywiZXhwIjoxNTQ5NTMwMDczfQ.qPSMsNZtjlG8nNWbVO0TF7h_VxLtz4rVzovuTSwVqW4";
+  let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZF9udW0iOjE0MjE2MTUsImlhdCI6MTU0OTc2NTkzNSwiZXhwIjoxNTQ5NzgwMzM1fQ.B5luDm0haW4Q1lpJ_ZPkFtOulLeNa07AEfc-aoxWR60";
   let body = {
     data: {},
     colleges: [],
@@ -82,7 +82,6 @@ router.get('/transaction/college', async (req, res) => {
     res.send(err);
   })
   .then(async data => {
-    var logs = [];
     var promises = [];
 
     for(let i = 0; i < data.length; i++){
@@ -230,7 +229,7 @@ router.get('/overdue-list', async (req, res) => {
     })
     .catch(err => {
       body.constructError(02, err);
-      res.send(err);
+      res.send(body);
     })
   
   async function getOverdueStudents(sessionId){

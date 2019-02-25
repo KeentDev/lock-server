@@ -77,12 +77,23 @@ global.verifyObjectId = function(id) {
   });
 }
 
+// CORS middleware
+var allowCrossDomain = function(req, res, next) {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
+ 
+  next();
+}
+
+app.use(allowCrossDomain);
+app.options('/', cors());
 app.use('/', rootApi);
 app.use('/user', user);
 app.use('/locker', locker);
 app.use('/stats', statistics);
 
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 3000;
 
 app.listen(port, function() {
   console.log(`Server has started on port ${port} `);
