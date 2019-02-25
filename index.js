@@ -11,6 +11,9 @@ let serverPort;
 global.serverUrl = 'localhost';
 global.serverPort = 27017;
 
+global.baseFee = 5;
+global.sequentialFee = 3;
+
 const app = express();
 
 app.set('superSecret', config.secret);

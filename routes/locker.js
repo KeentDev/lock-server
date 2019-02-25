@@ -502,7 +502,7 @@ router.post('/transaction/feed', async (req, res) => {
               await transactionLogs
                 .insertOne({
                   'type': transactionType,
-                  'amount': amount,
+                  'amount': parseInt(amount),
                   'date': currTime,
                   'activity_log_id': authLogId,
                   'user_num': userNum
@@ -555,7 +555,7 @@ router.post('/transaction/session', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const userNum = req.decoded.id_num || null;
   const authLogId = req.body.auth_activity_log_id || null;
-  const unitNum = req.body.unit_num || null;
+  const unitNum = parseInt(req.body.unit_num) || null;
   const sessionDuration = req.body.session_duration || null;
   const sessionDurationSeconds = sessionDuration * 60;
   const sessionEndDate = currTime + sessionDurationSeconds;
@@ -573,12 +573,113 @@ router.post('/transaction/session', async (req, res) => {
     await isFeedAuthorized(authLogId, true)
       .then(async authData => {
         const sessionLogs = await loadCollections('Session_Log');
+        const transactionLogs = await loadCollections('Transaction_Log');
         const isAuth = authData.isAuth;
         const transactionType = authData.transactionType;
         let sessionId = null;
 
         if (isAuth) {
           let transActivityType = null;
+          
+          verifyObjectId(authLogId)
+            .then(async id => {
+              return await transactionLogs
+                .findOne({
+                  'activity_log_id': authLogId
+                })
+                .then(async result => {
+                  let resultData = await result;
+                  return Promise.resolve(resultData.amount);
+                })
+                .catch(err => {
+                  return Promise.reject(err);
+                })
+            })
+            .catch(err => {
+              return Promise.reject(err);
+            })
+            .then(async result => {
+              const rfidCards = await loadCollections('RFID_Card');
+              let amount = parseInt(await result);
+              let totalAmountFee = baseFee + (sequentialFee * Math.ceil((sessionDuration/60)));
+              let creditAmount = amount - totalAmountFee;
+          
+              if(totalAmountFee > amount){
+                body.constructError(5, `Please insert a sufficient amount of atleast PHP ${totalAmountFee}`);
+                return Promise.reject()
+              }
+
+              await rfidCards
+                .findOne({
+                  'id_num': userNum
+                })
+                .then(result => {
+                  if(result){
+
+                    return Promise.resolve(result.credit);
+                  }else{
+                    return Promise.reject('User not found with RFID Cards.');
+                  }
+                })
+                .catch(err => {
+                  return Promise.reject(err);
+                })
+                .then(async result => {
+                  let credit = await result;
+
+                  return await rfidCards
+                    .updateOne({
+                      'id_num': userNum
+                    }, {
+                      $set: {
+                        'credit': creditAmount + credit
+                      }
+                    })
+                    .then(result => {
+                      return Promise.resolve();
+                    })
+                })
+                .then(async result => {
+                  return await updateSession()
+                    .then(async id => {
+                      await unitActivityLogs
+                        .insertOne({
+                          'type': transActivityType,
+                          'date': currTime,
+                          'authorized': true,
+                          'authenticated': true,
+                          'session_id': id
+                        })
+                        .then(result => {
+                          let data = {
+                            'authenticated': true,
+                          }
+            
+                          body.data = data;
+                          body.success = true;
+            
+                          res.send(body);
+                        })
+                        .catch(err => {
+                          console.error(err);
+                          res.send(body);
+                        })
+                    })
+                    .catch(e => {
+                      console.error(e);
+                      body.constructError(02, 'There is a problem checking your unit. Please try again later.');
+                      res.send(body);
+                      return Promise.resolve();
+                    })
+                })
+                .catch(err => {
+                  return Promise.rejecet(err);
+                })
+                
+            })
+            .catch(err => {
+              res.send(body);
+            })
 
           async function updateSession(){
             switch (transactionType) {
@@ -605,55 +706,23 @@ router.post('/transaction/session', async (req, res) => {
                   })
                   .then(async id => {
                     const rentalInfos = await loadCollections('Rental_Unit_Info');
-                    const lockers = await loadCollections('Locker_Units');
-
-                    await Promise.all([updateRental(), updateLocker()])
-                      .then(resolvePromises => {
-                        console.log('done');
-                        console.log(unitNum);
+                    return await rentalInfos
+                      .updateOne({
+                        'unit_num': unitNum
+                      }, {
+                        $set: {
+                          'mode': 'occupied',
+                          'session_id': id,
+                          'user_num': userNum
+                        }
+                      })
+                      .then(async result => {
                         return Promise.resolve(id);
                       })
                       .catch(err => {
-                        console.error(err);
+                        return Promise.reject(err);
                       })
-
-                    async function updateRental() {
-                      return await rentalInfos
-                        .updateOne({
-                          'unit_num': unitNum
-                        }, {
-                          $set: {
-                            'mode': 'occupied',
-                            'session_id': id,
-                            'user_num': userNum
-                          }
-                        })
-                        .then(async result => {
-                          return Promise.resolve();
-                        })
-                        .catch(err => {
-                          return Promise.reject(err);
-                        })
-                    };
-                    async function updateLocker() {
-                      return await lockers
-                        .updateOne({
-                          'unit_number': unitNum
-                        }, {
-                          $set: {
-                            'unit_status': 'occupied',
-                          }
-                        })
-                        .then(result => {
-                          return Promise.resolve();
-                        })
-                        .catch(err => {
-                          return Promise.reject(err);
-                        })
-                    };
                   })
-                
-                break;
           
               case 'extend_auth':
                 transActivityType = activityObj.EXTEND_SESSION;
@@ -710,8 +779,6 @@ router.post('/transaction/session', async (req, res) => {
                       })
                     
                   })
-
-                break;
           
               case 'overdue_auth':
                 transActivityType = activityObj.OVERDUE_SESSION;
@@ -728,37 +795,6 @@ router.post('/transaction/session', async (req, res) => {
             }
           }
 
-          await updateSession()
-            .then(async id => {
-              await unitActivityLogs
-                .insertOne({
-                  'type': transActivityType,
-                  'date': currTime,
-                  'authorized': true,
-                  'authenticated': true,
-                  'session_id': id
-                })
-                .then(result => {
-                  let data = {
-                    'authenticated': true,
-                  }
-    
-                  body.data = data;
-                  body.success = true;
-    
-                  res.send(body);
-                })
-                .catch(err => {
-                  console.error(err);
-                  res.send(body);
-                })
-            })
-            .catch(e => {
-              console.error(e);
-              body.constructError(02, 'There is a problem checking your unit. Please try again later.');
-              res.send(body);
-            })
-          
         } else {
           body.constructError(04, 'Authorized Log is not valid');
           res.send(body);
@@ -768,6 +804,7 @@ router.post('/transaction/session', async (req, res) => {
         console.error(err);
         body.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
         res.send(err);
+        return Promise.resolve();
       })
   }else{
     res.send(body);
@@ -931,6 +968,7 @@ async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
   }
 }
 
+// Fetch session ID based on current rental unit number
 async function getSessionByRentalUnit(unitNum){
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   
@@ -1028,6 +1066,23 @@ async function getCurrentSessionMatchId(userNum, unitNum, onGoing, returnTimeLef
         return Promise.reject(err);
       })
   }
+}
+
+async function creditTransactionPayment(transactionId){
+  const transactionLogs = await loadCollections('Transaction_Log');
+
+  await transactionLogs
+    .findOne({
+      '_id': transactionId
+    })
+    .then(async result => {
+      let resultData = await result;
+      if(resultData){
+        let amount = resultData.amount;
+
+        console.log(amount);
+      }
+    })
 }
 
 module.exports = router;
