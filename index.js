@@ -61,6 +61,11 @@ Object.prototype.constructError = function (errorCode, errorMsg) {
   }
 }
 
+Object.prototype.constructBody = function (body) {
+  this.success = true;
+  this.data = body;
+}
+
 Object.prototype.ObjectKeyMapper = function (oldKey, newKey) {
   let value = this[oldKey];
 

@@ -188,12 +188,13 @@ router.get('/suggest-unit', async (req, res) => {
 router.post('/transaction/authorization', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const rentalInfos = await loadCollections('Rental_Unit_Info');
+  const unitActivities = await loadCollections('Unit_Activity_Logs');
+  const sessionLogs = await loadCollections('Session_Log');
 
   const unitNum = parseInt(req.body.unit_num) || parseInt(req.query.unit_num) || null;
   const userNum = req.decoded.id_num || null;
   const transactionType = req.body.transaction_type || req.query.transaction_type || null;
 
-  let apiCodes = [];
   let body = {};
 
   !userNum ? body.constructError(1.2, `User Id parameter is required.`) : null;
@@ -201,280 +202,127 @@ router.post('/transaction/authorization', async (req, res) => {
 
   let transActivityType = null;
 
-  let SESSION_ID;
-
-  switch (transactionType) {
-    case 'rent':
-      transActivityType = activityObj.RENT_AUTH;
-      break;
-
-    case 'extend':
-      transActivityType = activityObj.EXTEND_AUTH;
-      break;
-
-    case 'overdue':
-      transActivityType = activityObj.OVERDUE_AUTH;
-      break;
-
-    case 'reserve':
-      transActivityType = activityObj.RESERVE_AUTH;
-      break;
-
-    default:
-      break;
-  } 
-
-  async function isUserAuthorized(userNum, type) {
-    if(userNum){
-      if([activityObj.RENT_AUTH,
-        activityObj.RESERVE_AUTH
-        ].includes(type)){
-          return await rentalInfos 
-            .findOne({
-              'user_num': userNum
-            })
-            .then(result => {
-              let isAuth = false;
-              if(result){
-                isAuth = false;
-                apiCodes.push(1);
-              }else{
-                isAuth = true;
-              }
-              return Promise.resolve(isAuth);
-            })
-            .catch(err => {
-              return Promise.reject(err);
-            })
-      }else if(type == activityObj.EXTEND_AUTH){
-        return await getCurrentSessionMatchId(userNum, unitNum, true)
-          .then(async sessionId => {
-            if(!!sessionId){
-              return Promise.resolve(true);
-            }else{
-              return Promise.resolve(false);
-            }
-          })
-          .catch(err => {
-            let errMsg;
-            switch (err) {
-              case 1:
-                errMsg = 'Invalid Session ID format from rental record.'
-                break;
-              case 2:
-                errMsg = 'Session record does not exist.'
-                break;
-              case 3:
-                errMsg = 'Rental session does not exist.'
-                break;
-              default:
-                break;
-            }
-            body.constructError(4, errMsg);
-            return Promise.reject(err);
-          })
-      }else if(type == activityObj.OVERDUE_AUTH){
-        return await getCurrentSessionMatchId(userNum, unitNum, false, true)
-          .then(async timeLeft => {
-            if(!!timeLeft){
-              let overdueTime = 432000; // 5 days
-              if((timeLeft * -1) >= overdueTime){
-                apiCodes.push(1);
-                return Promise.resolve(false);
-              }
-              return Promise.resolve(true);
-            }else{
-              return Promise.resolve(false);
-            }
-          })
-          .catch(err => {
-            let errMsg;
-            switch (err) {
-              case 1:
-                errMsg = 'Invalid Session ID format from rental record.'
-                break;
-              case 2:
-                errMsg = 'Session record does not exist.'
-                break;
-              case 3:
-                errMsg = 'Rental session does not exist.'
-                break;
-              default:
-                break;
-            }
-            body.constructError(4, errMsg);
-            return Promise.reject(err);
-          })
-      }else {
-        let errorMsg = 'Transaction type is required.';
-        body.constructError(1.2, errorMsg);
-        return Promise.reject(errorMsg);
-      }
-    }else{
-      return Promise.resolve(false);
+  let transAuth = async () => {
+    if(!userNum || !unitNum){
+      return Promise.reject(-1)
     }
-  }
-
-  async function isUnitAuthorized(unitNum, type) {
-    if(unitNum){
-      if([activityObj.RENT_AUTH,
-        activityObj.RESERVE_AUTH
-        ].includes(type)){
-          return await rentalInfos 
-            .findOne({
-              'unit_num': unitNum,
-            })
-            .then(result => {
-              let isAuth = false;
-              if(result){
-                let mode = result.mode;
+    switch(transactionType){
+      case 'rent':
+        transActivityType = activityObj.RENT_AUTH;
   
-                if(mode == 'available'){
-                  isAuth = true;
-                }else{
-                  isAuth = false;
-                  apiCodes.push(2);
-                }
-              }else{
-                apiCodes.push(2);
-                isAuth = false;
-              }
-              return Promise.resolve(isAuth);
-            })
-            .catch(err => {
-              return Promise.reject(err);
-            })
-      }else if(type == activityObj.EXTEND_AUTH){
-        return await getCurrentSessionMatchId(userNum, unitNum, true)
-          .then(async sessionId => {
-            if(!!sessionId){
-              return Promise.resolve(true);
+        return await rentalInfos
+          .findOne({
+            'user_num': userNum,
+            'unit_num': unitNum
+          })
+          .then(result => {
+            if(!!result){
+              body.success = true;
+              body.data = result;
+              return Promise.reject(1);
             }else{
-              return Promise.resolve(false);
-            }
-          })
-          .catch(err => {
-            let errMsg;
-            switch (err) {
-              case 1:
-                errMsg = 'Invalid Session ID format from rental record.'
-                break;
-              case 2:
-                errMsg = 'Session record does not exist.'
-                break;
-              case 3:
-                errMsg = 'Rental session does not exist.'
-                break;
-              default:
-                break;
-            }
-            body.constructError(4, errMsg);
-            return Promise.reject(err);
-          })
-      }else if(type == activityObj.OVERDUE_AUTH){
-        return await getCurrentSessionMatchId(userNum, unitNum, false, true)
-          .then(async timeLeft => {
-            if(!!timeLeft){
-              let overdueTime = 432000; // 5 days
-              if((timeLeft * -1) >= overdueTime){
-                apiCodes.push(1);
-                return Promise.resolve(false);
-              }
               return Promise.resolve(true);
-            }else{
-              return Promise.resolve(false);
             }
           })
-          .catch(err => {
-            let errMsg;
-            switch (err) {
-              case 1:
-                errMsg = 'Invalid Session ID format from rental record.'
-                break;
-              case 2:
-                errMsg = 'Session record does not exist.'
-                break;
-              case 3:
-                errMsg = 'Rental session does not exist.'
-                break;
-              default:
-                break;
-            }
-            body.constructError(4, errMsg);
-            return Promise.reject(err);
-          })
-      }else {
-        let errorMsg = 'Transaction type is required.';
-        body.constructError(1.2, errorMsg);
-        return Promise.reject(errorMsg);
-      }
-    }else{
-      return Promise.resolve(false);
-    }
-    
-  }
+          .catch(err => {console.error(err); return Promise.reject(0)});
 
-  async function isTransactionTypeValid(transactionType) {
-    if(transactionType){
-      if(activityType.includes(transactionType)){
-        return Promise.resolve(true);
-      }else{
-        body.constructError(3, 'Please encode a valid transaction type format and value.');
-        return Promise.reject(false);
-      }
-    }else{
-      body.constructError(1, `Transaction type parameter is required.`);
-      return Promise.reject(false);
+      case 'overdue': 
+        transActivityType = activityObj.OVERDUE_AUTH;
+        
+        return await isSessionAuth(userNum, unitNum, false)
+          .then(isAuth => {
+            if(isAuth){
+              return Promise.resolve(true);
+            }else{
+              return Promise.reject(3);
+            }
+          })
+          .catch(err => Promise.reject(err));
+
+      case 'extend': 
+        transActivityType = activityObj.EXTEND_AUTH;
+
+        return await isSessionAuth(userNum, unitNum, true)
+          .then(isAuth => {
+            if(isAuth){
+              return Promise.resolve(true);
+            }else{
+              return Promise.reject(4);
+            }
+          })
+          .catch(err => Promise.reject(err));
+          
+      case 'reserve':
+        transActivityType = activityObj.RESERVE_AUTH;
+        break;
+      default:
+        transActivityType = null;
     }
   }
 
-  await Promise.all([
-    isUserAuthorized(userNum, transActivityType),
-    isUnitAuthorized(unitNum, transActivityType),
-    isTransactionTypeValid(transActivityType)
-  ]).then(async auth => {
-    const activityLogs = await loadCollections('Unit_Activity_Logs');
+  await transAuth()
+    .then(async result => {
+      return await sessionLogs
+        .insertOne({
+          'start_date': null,
+          'end_date': null,
+          'user_num': userNum,
+          'unit_num': unitNum
+        })
+        .then(result => {
+          let sessionId = result.insertedId.toString();
 
-    let unitAuthorized = auth[1];
-    let userAuthorized = auth[0];
-    let rentAuthorized = await unitAuthorized && await userAuthorized;
-    var sessionId = null;
-
-    if([activityObj.OVERDUE_AUTH,
-      activityObj.OVERDUE_SESSION,
-      activityObj.EXTEND_AUTH,
-      activityObj.EXTEND_SESSION
-      ].includes(transActivityType)){
-      sessionId = SESSION_ID;
-    }
-
-    activityLogs.insertOne({
-      'type': transActivityType,
-      'date': currTime,
-      'authorized': await rentAuthorized,
-      'authenticated': false,
-      'session_id': sessionId
-    }, {}, (err, result) => {
-      if (!err && (result.insertedCount >= 1)) {
-        let data = {
-          'activity_log_id': result.insertedId,
-          'authorized': rentAuthorized
-        }
-
-        body.data = data;
-        apiCodes.length > 0 ? body.data.api_msg_code = apiCodes : null;
-        body.success = true;
-
-        res.send(body);
-      } else {
-        body.constructError(02, 'There is a problem checking your unit. Please try again later.');
-        res.send(body);
-      }
+          return Promise.resolve(sessionId);
+        })
+        .catch(err => {console.error(err); return Promise.reject(0)});
     })
-  }).catch(err => {
-    console.error(err);
-    res.send(body);
-  });
+    .then(async sessionId => {
+      return await unitActivities
+        .insertOne({
+          'type': transActivityType,
+          'date': currTime,
+          'authenticated': false,
+          'session_id': sessionId
+        })
+        .then(result => {
+          let unitActivityId = result.insertedId.toString();
+
+          return Promise.resolve(unitActivityId);
+        })
+        .catch(err => {console.error(err); return Promise.reject(0)});
+    })
+    .then(unitAcitivityId => {
+      body.constructBody({
+        auth_acticity_id: unitAcitivityId
+      });
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+          case 1:
+            body.constructError(4, `User or Unit is not authorized for rental.`);
+            break;
+          case 2:
+            body.constructError(4, `Rental info for User and Unit does not exists.`);
+            break;
+          case 3:
+            body.constructError(4, `Cannot perform overdue service, session is ongoing.`);
+            break;
+          case 4:
+            body.constructError(4, `Cannot perform extend service, session has expired.`);
+            break;
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
 });
 
 router.post('/transaction/feed', async (req, res) => {
@@ -876,6 +724,33 @@ router.post('/transaction/end', async (req, res) => {
       })
   }
 })
+
+async function isSessionAuth(userNum, unitNum, hasTimeLeft){
+  const sessionLogs = await loadCollections('Session_Log');
+  const currTime = Math.floor((new Date).getTime()/1000);
+
+  return await sessionLogs
+    .findOne({
+      'user_num': userNum,
+      'unit_num': unitNum
+    })
+    .catch(err => { console.error(err); return Promise.reject(0)} )
+    .then(result => {
+      if(!!result){
+        let endDate = result.end_date;
+        let timeLeft = endDate - currTime;
+        
+        if(((timeLeft > 0) && hasTimeLeft) || (timeLeft <= 0 && !hasTimeLeft)){
+          return Promise.resolve(true);
+        }else{
+          return Promise.resolve(false);
+        }
+      }else{
+        return Promise.reject(2);
+      }
+    })
+    .catch(err => Promise.reject(err));
+}
 
 // isFeedAuthorized checks for the authorization in Unit Activity Log 
 async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
