@@ -325,6 +325,88 @@ router.post('/transaction/authorization', async (req, res) => {
     })
 });
 
+router.post('/transaction/invoice', async (req, res) => {
+  const invoiceLogs = await loadCollections('Invoice');
+
+  const currTime = Math.floor((new Date).getTime()/1000);
+
+  const activityId = req.body.auth_activity_id || req.query.auth_activity_id || null;
+  const hours = req.body.hours || req.query.hours || null;
+
+  let body = {};
+
+  !activityId ? body.constructError(1, `Authentication Activity ID parameter is required.`) : null;
+  !hours ? body.constructError(1, `Hours parameter is required.`) : null;
+
+  await isActivityAuth(activityId, false)
+    .then(async result => {
+      let totalAmount = calculateFee(hours);
+
+      if(!activityId || !hours){
+        return Promise.reject(-1);
+      }
+
+      return await invoiceLogs
+        .findOne({
+          'activity_log_id': activityId
+        })
+        .then(async result => {
+          if(!!result){
+            return Promise.reject(3);
+          }else{
+            return Promise.resolve();
+          }
+        })
+        .then(async result => {
+          return await invoiceLogs 
+            .insertOne({
+              'activity_log_id': activityId,
+              'hours': hours,
+              'amount': totalAmount,
+              'date': currTime
+            })
+            .catch(err => {console.error(err); return Promise.reject(4)})
+            .then(result => {
+              let invoiceId = result.insertedId.toString();
+    
+              return Promise.resolve({
+                invoice_id: invoiceId,
+                fee: totalAmount
+              });
+            })
+        })
+        .catch(err => Promise.reject(err));
+    })
+    .then(invoiceObj => {
+      body.constructBody(invoiceObj)
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+            break;
+          case 1:
+            body.constructError(4, `Activity Log is not authorized for this service.`);
+            break;
+          case 2:
+            body.constructError(4, `Unit Activity Log does not exists with the given activity ID.`);
+            break;
+          case 3:
+            body.constructError(4, `Invoice already exists for the given activity ID.`);
+            break;
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
+});
+
 router.post('/transaction/feed', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const activityLogs = await loadCollections('Unit_Activity_Logs');
@@ -748,6 +830,33 @@ async function isSessionAuth(userNum, unitNum, hasTimeLeft){
       }else{
         return Promise.reject(2);
       }
+    })
+    .catch(err => Promise.reject(err));
+}
+
+async function isActivityAuth(activityId, isAuthenticated){
+  const unitActivities = await loadCollections('Unit_Activity_Logs');
+
+  return await verifyObjectId(activityId)
+    .catch(err => {console.error(err); return Promise.reject(0)})
+    .then(async id => {
+      return await unitActivities
+        .findOne({
+          '_id': id
+        })
+        .catch(err => {console.error(err); return Promise.reject(2)})
+        .then(result => {
+          if(!!result){
+            if((result.authenticated && isAuthenticated) || (!result.authenticated && !isAuthenticated)){
+              return Promise.resolve(true);
+            }else{
+              return Promise.reject(1);
+            }
+          }else{
+            return Promise.reject(2);
+          }
+        })
+        .catch(err => Promise.reject(err));
     })
     .catch(err => Promise.reject(err));
 }

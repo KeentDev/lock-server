@@ -44,6 +44,10 @@ global.loadCollections = async function(collectionName) {
   return client.db('Thesis').collection(collectionName);
 }
 
+global.calculateFee = function(hours) {
+  return baseFee + (sequentialFee * hours);
+}
+
 Object.prototype.constructError = function (errorCode, errorMsg) {
   this.success = false;
   if (!this.error_code) {
