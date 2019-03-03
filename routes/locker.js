@@ -15,6 +15,20 @@ const activityObj = {
   UNIT_USAGE: activityType[9],
 }
 
+const activityAuth = [
+  activityObj.RENT_AUTH,
+  activityObj.EXTEND_AUTH,
+  activityObj.OVERDUE_AUTH
+]
+
+const activitySession = [
+  activityObj.RENT_SESSION,
+  activityObj.EXTEND_SESSION,
+  activityObj.OVERDUE_SESSION
+]
+
+
+
 const router = express.Router();
 
 router.get('/unit-list', async (req, res) => {
@@ -293,7 +307,7 @@ router.post('/transaction/authorization', async (req, res) => {
     })
     .then(unitAcitivityId => {
       body.constructBody({
-        auth_acticity_id: unitAcitivityId
+        auth_activity_id: unitAcitivityId
       });
 
       res.send(body);
@@ -706,264 +720,122 @@ router.post('/transaction/authenticate', async (req, res) => {
 });
 
 router.post('/transaction/session', async (req, res) => {
-  const currTime = Math.floor((new Date).getTime()/1000);
-  const userNum = req.decoded.id_num || null;
-  const authLogId = req.body.auth_activity_log_id || null;
-  const unitNum = parseInt(req.body.unit_num) || null;
-  const sessionDuration = req.body.session_duration || null;
-  const sessionDurationSeconds = sessionDuration * 60;
-  const sessionEndDate = currTime + sessionDurationSeconds;
+  const unitActivities = await loadCollections('Unit_Activity_Logs');
+  const sessionLogs = await loadCollections('Session_Log');
+  const rentalInfos = await loadCollections('Rental_Unit_Info');
 
+  const activityId = req.body.auth_activity_log_id || req.query.auth_activity_log_id || null;
+  const userNum = req.decoded.id_num || null;
+
+  const currTime = Math.floor((new Date).getTime()/1000);
   let body = {};
 
   !userNum ? body.constructError(01, `User ID parameter is required.`) : null;
-  !unitNum ? body.constructError(01, `Unit ID parameter is required.`) : null;
-  !authLogId ? body.constructError(01, `Authorization Log ID parameter is required.`) : null;
-  !sessionDuration ? body.constructError(01, 'Session duration parameter is required.') : null;
+  !activityId ? body.constructError(01, `Authorization Log ID parameter is required.`) : null;
 
-  if (userNum && unitNum && authLogId && sessionDuration) {
-    const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
+  await isActivityAuth(activityId, true, true)
+    .then(async activity => {
+      let sessionId = activity.session_id;
+      let activityType = activity.type;
+      let newActivityType;
 
-    await isFeedAuthorized(authLogId, true)
-      .then(async authData => {
-        const sessionLogs = await loadCollections('Session_Log');
-        const transactionLogs = await loadCollections('Transaction_Log');
-        const isAuth = authData.isAuth;
-        const transactionType = authData.transactionType;
-        let sessionId = null;
+      if(activityAuth.includes(activityType)){
+        newActivityType = activitySession[activityAuth.indexOf(activityType)];
+      }else{
+        return Promise.reject(3);
+      }
 
-        if (isAuth) {
-          let transActivityType = null;
-          
-          verifyObjectId(authLogId)
-            .then(async id => {
-              return await transactionLogs
-                .findOne({
-                  'activity_log_id': authLogId
-                })
-                .then(async result => {
-                  let resultData = await result;
-                  return Promise.resolve(resultData.amount);
-                })
-                .catch(err => {
-                  return Promise.reject(err);
-                })
-            })
-            .catch(err => {
-              return Promise.reject(err);
-            })
-            .then(async result => {
-              const rfidCards = await loadCollections('RFID_Card');
-              let amount = parseInt(await result);
-              let totalAmountFee = baseFee + (sequentialFee * Math.ceil((sessionDuration/60)));
-              let creditAmount = amount - totalAmountFee;
-          
-              if(totalAmountFee > amount){
-                body.constructError(5, `Please insert a sufficient amount of atleast PHP ${totalAmountFee}`);
-                return Promise.reject()
-              }
-
-              await rfidCards
-                .findOne({
-                  'id_num': userNum
-                })
-                .then(result => {
-                  if(result){
-
-                    return Promise.resolve(result.credit);
-                  }else{
-                    return Promise.reject('User not found with RFID Cards.');
-                  }
-                })
-                .catch(err => {
-                  return Promise.reject(err);
-                })
-                .then(async result => {
-                  let credit = await result;
-
-                  return await rfidCards
-                    .updateOne({
-                      'id_num': userNum
-                    }, {
-                      $set: {
-                        'credit': creditAmount + credit
-                      }
-                    })
-                    .then(result => {
-                      return Promise.resolve();
-                    })
-                })
-                .then(async result => {
-                  return await updateSession()
-                    .then(async id => {
-                      await unitActivityLogs
-                        .insertOne({
-                          'type': transActivityType,
-                          'date': currTime,
-                          'authorized': true,
-                          'authenticated': true,
-                          'session_id': id
-                        })
-                        .then(result => {
-                          let data = {
-                            'authenticated': true,
-                          }
-            
-                          body.data = data;
-                          body.success = true;
-            
-                          res.send(body);
-                        })
-                        .catch(err => {
-                          console.error(err);
-                          res.send(body);
-                        })
-                    })
-                    .catch(e => {
-                      console.error(e);
-                      body.constructError(02, 'There is a problem checking your unit. Please try again later.');
-                      res.send(body);
-                      return Promise.resolve();
-                    })
-                })
-                .catch(err => {
-                  return Promise.rejecet(err);
-                })
-                
-            })
-            .catch(err => {
-              res.send(body);
-            })
-
-          async function updateSession(){
-            switch (transactionType) {
-              case 'rent_auth':
-                transActivityType = activityObj.RENT_SESSION;
-                return await sessionLogs
-                  .insertOne({
-                    "start_date": currTime,
-                    "end_date": sessionEndDate,
-                    "user_num": userNum,
-                    "unit_num": unitNum,
-                  })
-                  .then(async data => {
-                    return await sessionLogs
-                      .findOne({
-                        'user_num': userNum,
-                        'unit_num': unitNum,
-                        "start_date": currTime,
-                        "end_date": sessionEndDate
-                      })
-                      .then(data => {
-                        return Promise.resolve(data._id.toString());
-                      })
-                  })
-                  .then(async id => {
-                    const rentalInfos = await loadCollections('Rental_Unit_Info');
-                    return await rentalInfos
-                      .updateOne({
-                        'unit_num': unitNum
-                      }, {
-                        $set: {
-                          'mode': 'occupied',
-                          'session_id': id,
-                          'user_num': userNum
-                        }
-                      })
-                      .then(async result => {
-                        return Promise.resolve(id);
-                      })
-                      .catch(err => {
-                        return Promise.reject(err);
-                      })
-                  })
-          
-              case 'extend_auth':
-                transActivityType = activityObj.EXTEND_SESSION;
-
-                return await getSessionByRentalUnit(unitNum)
-                  .then(async id => {
-                    return await verifyObjectId(id)
-                      .then(async sessionId => {
-                        return await sessionLogs
-                          .findOne({
-                            '_id': sessionId
-                          })
-                          .then(data => {
-                            let currEndTime = data.end_date;
-                            let resData = {
-                              'session_id': id,
-                              'curr_end_time': currEndTime
-                            }
-                            return Promise.resolve(resData);
-                          })
-                          .catch(e => {
-                            console.error(e);
-                            return Promise.reject(e);
-                          })
-                      })
-                      .catch(e => {
-                        console.error(e);
-                        console.error('Please encode valid session ID format and value.');
-                        return Promise.reject(e);
-                      })
-                      .then(async resData => {
-                        currEndTime = resData.curr_end_time;
-                        sessionId = resData.session_id;
-                        if(currEndTime){
-                          let newEndTime = currEndTime + sessionDurationSeconds;
-                          return await sessionLogs
-                            .updateOne({
-                              '_id': new ObjectID(sessionId.toString())
-                            }, {
-                              $set: {
-                                'end_date': newEndTime
-                              }
-                            })
-                            .then(data => {
-                              return Promise.resolve(sessionId);
-                            })
-                            .catch(e => {
-                              console.error(e);
-                              return Promise.reject(false);
-                            })
-                        }else{
-                          return Promise.reject('Current end time is NaN');
-                        }
-                      })
-                    
-                  })
-          
-              case 'overdue_auth':
-                transActivityType = activityObj.OVERDUE_SESSION;
-
-
-                break;
-          
-              case 'reserve_auth':
-                transActivityType = activityObj.RESERVE_SESSION;
-                break;
-          
-              default:
-                break;
-            }
+      return await unitActivities
+        .findOne({
+          type: newActivityType,
+          session_id: sessionId
+        })
+        .then(async result => {
+          if(!!result){
+            return Promise.reject(5);
+          }else{
+            return await unitActivities
+              .insertOne({
+                type: newActivityType,
+                date: currTime,
+                authenticated: true,
+                session_id: sessionId
+              })
+              .then(result => {
+                return Promise.resolve(sessionId);
+              })
           }
+        })
+    })
+    .then(async sessionId => {
+      return await verifyObjectId(sessionId)
+        .catch(err => {console.error(err); return Promise.reject(0)})
+        .then(async id => {
+          return await sessionLogs
+            .findOne({
+              '_id': id
+            })
+            .then(session => {
+              if(!!session){
+                let unitNum = session.unit_num;
+                
+                return Promise.resolve([unitNum, sessionId]);
+              }else{
+                return Promise.reject(4);
+              }
+            })
+        })
+        .catch(err => Promise.reject(err));
+    })
+    .then(async rentalData => {
+      let unitNum = rentalData[0];
+      let sessionId = rentalData[1];
 
-        } else {
-          body.constructError(04, 'Authorized Log is not valid');
-          res.send(body);
+      return await rentalInfos
+        .updateOne({
+          'unit_num': unitNum
+        }, {
+          $set: {
+            user_num: userNum,
+            mode: 'occupied',
+            session_id: sessionId
+          }
+        })
+    })
+    .then(result => {
+      body.constructBody();
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+            break;
+          case 1:
+            body.constructError(4, `Activity Log is not authorized for this service.`);
+            break;
+          case 2:
+            body.constructError(4, `Unit Activity Log does not exists with the given activity ID.`);
+            break;
+          case 3:
+            body.constructError(4, `Activity is not a valid activity type.`);
+            break;
+          case 4:
+            body.constructError(4, `Session not found for the given Activity ID.`);
+            break;
+          case 5:
+            body.constructError(4, `This activity has already been performed.`);
+            break;
         }
-      })
-      .catch(err => {
-        console.error(err);
-        body.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
-        res.send(err);
-        return Promise.resolve();
-      })
-  }else{
-    res.send(body);
-  }
-
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
 });
 
 router.post('/transaction/end', async (req, res) => {
@@ -1054,7 +926,7 @@ async function isSessionAuth(userNum, unitNum, hasTimeLeft){
     .catch(err => Promise.reject(err));
 }
 
-async function isActivityAuth(activityId, isAuthenticated){
+async function isActivityAuth(activityId, isAuthenticated, returnActivity = false){
   const unitActivities = await loadCollections('Unit_Activity_Logs');
 
   return await verifyObjectId(activityId)
@@ -1068,7 +940,11 @@ async function isActivityAuth(activityId, isAuthenticated){
         .then(result => {
           if(!!result){
             if((result.authenticated && isAuthenticated) || (!result.authenticated && !isAuthenticated)){
-              return Promise.resolve(true);
+              if(returnActivity){
+                return Promise.resolve(result);
+              }else{
+                return Promise.resolve(true);
+              }
             }else{
               return Promise.reject(1);
             }
@@ -1088,127 +964,6 @@ async function isTimeAuth(startTime, endTime, hasTimeLeft){
     return Promise.resolve(true);
   }else{
     return Promise.resolve(false);
-  }
-}
-
-// isFeedAuthorized checks for the authorization in Unit Activity Log 
-async function isFeedAuthorized(authLogId, shouldBeAuthenticated) {
-  if (authLogId) {
-    return new Promise((resolve, reject) => {
-      verifyObjectId(authLogId)
-        .then(async id => {
-          let resultData = {
-            isAuth: false,
-            transactionType: ''
-          };
-          const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
-
-          await unitActivityLogs
-            .find({
-              '_id': id
-            }, {
-              projection: {
-                'authorized': 1,
-                'type': 1,
-                'authenticated': 1,
-                '_id': 0
-              }
-            })
-            .toArray()
-            .then(data => {
-              if (data.length > 0) {
-                let thisData = data[0];
-                let isAuth = false;
-                let isRentAuth = false;
-
-                resultData.transactionType = thisData.type;
-
-                if (activityType.includes(thisData.type)) {
-                  isRentAuth = true;
-                  if (thisData.authorized && (thisData.authenticated === shouldBeAuthenticated)) {
-                    isAuth = true;
-                  } else {
-                    let bodyError = {};
-                    let errorMsg = 'Rental transaction is not authorized.';
-
-                    if(shouldBeAuthenticated && (!thisData.authenticated)){
-                      errorMsg = 'Transaction is not authenticated.'
-                    }else if(!shouldBeAuthenticated && thisData.authenticated){
-                      errorMsg = 'Transaction is already authenticated.'
-                    }
-                    bodyError.constructError(04, errorMsg);
-
-                    return reject(bodyError);
-                  }
-                } else {
-                  let bodyError = {};
-                  bodyError.constructError(04, `Activity log type is not valid.`);
-
-                  return reject(bodyError);
-                }
-
-                if (isAuth && isRentAuth) {
-                  resultData.isAuth = true;
-                  return resolve(resultData);
-                } else {
-                  resultData.isAuth = false;
-                  return resolve(resultData);
-                }
-              } else {
-                let bodyError = {};
-                bodyError.constructError(0, `Activity log with ID ${authLogId} not found.`);
-
-                return reject(bodyError);
-              }
-            })
-            .catch(err => {
-              let bodyError = {};
-              bodyError.constructError(02, err);
-
-              return reject(bodyError);
-            })
-        })
-        .catch(err => {
-          let bodyError = {};
-          console.error(err);
-          bodyError.constructError(03, 'Please encode a valid Authorized Log ID format and value.');
-          reject(bodyError);
-        })
-    });
-  } else {
-    let bodyError = {};
-    bodyError.constructError(01, `Activity log ID of rental authentication is required.`);
-    return Promise.reject(bodyError);
-  }
-}
-
-// Fetch session ID based on current rental unit number
-async function getSessionByRentalUnit(unitNum){
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  
-  if(unitNum){
-    return await rentalInfos
-      .findOne({
-        'unit_num': unitNum
-      })
-      .then(result => {
-        let sessionId = null;
-        
-        try{
-          sessionId = result.session_id;
-        }catch(e){
-          console.error(e);
-          return Promise.reject(false);
-        }
-
-        return Promise.resolve(sessionId);
-      })
-      .catch(e => {
-        console.error(e);
-      })
-  }else{
-    console.error('Session with Unit ID is not found.');
-    return Promise.reject(false);
   }
 }
 
