@@ -408,6 +408,78 @@ router.post('/transaction/invoice', async (req, res) => {
 });
 
 router.post('/transaction/feed', async (req, res) => {
+  const userAccounts = await loadCollections('RFID_Card');
+
+  let amount = parseInt(req.query.amount || req.body.amount) || null;
+  const userNum = req.decoded.id_num || null;
+
+  let body = {};
+
+  !amount ? body.constructError(01, `Amount parameter is required.`) : null;
+
+  await userAccounts
+    .findOne({
+      'id_num': userNum
+    })
+    .then(result => {
+      if(!!result){
+        let userCreditBalance = result.credit;
+
+        if(amount >= 0){
+          let userUpdatedCreditBalance = userCreditBalance + amount;
+
+          return Promise.resolve(userUpdatedCreditBalance);
+        }else{
+          return Promise.reject(2);
+        }
+
+      }else{
+        return Promise.reject(1);
+      }
+    })
+    .then(async userBalance => {
+      return await userAccounts
+        .updateOne({
+          'id_num': userNum
+        }, {
+          $set: {
+            'credit': userBalance
+          }
+        })
+        .then(result => {
+          return Promise.resolve(userBalance);
+        })
+    })
+    .then(userBalance => {
+      body.constructBody({
+        updated_balance: userBalance
+      });
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+            break;
+          case 1:
+            body.constructError(2, `User account not found.`);
+            break;
+          case 2:
+            body.constructError(2, `Amount must be of a positive integer.`);
+            break;
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
+});
+
+router.post('/transaction/authenticate', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const activityLogs = await loadCollections('Unit_Activity_Logs');
   const transactionLogs = await loadCollections('Transaction_Log');
