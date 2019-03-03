@@ -422,6 +422,10 @@ router.post('/transaction/feed', async (req, res) => {
       'id_num': userNum
     })
     .then(result => {
+      if(!amount){
+        return Promise.reject(-1);
+      }
+
       if(!!result){
         let userCreditBalance = result.credit;
 
