@@ -410,74 +410,222 @@ router.post('/transaction/invoice', async (req, res) => {
 router.post('/transaction/feed', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   const activityLogs = await loadCollections('Unit_Activity_Logs');
-  const authLogId = req.body.auth_activity_log_id || null;
-  const amount = req.body.transaction_amount || null;
+  const transactionLogs = await loadCollections('Transaction_Log');
+  const userAccounts = await loadCollections('RFID_Card');
+  const invoiceLogs = await loadCollections('Invoice');
+
+  const invoiceId = req.query.invoice_id || req.body.invoice_id || null;
+  const amount = parseInt(req.query.transaction_amount || req.body.transaction_amount) || null;
   const userNum = req.decoded.id_num || null;
 
   let body = {};
+  let promises = [];
+
   !amount ? body.constructError(01, `Amount parameter is required.`) : null;
   !userNum ? body.constructError(01, `User Id parameter is required.`) : null;
+  !invoiceId ? body.constructError(01, `Invoice ID parameter is required.`) : null;
 
-  if (amount && userNum) {
-    await isFeedAuthorized(authLogId, false)
-      .then(async authData => {
-        const isAuth = authData.isAuth;
-        const transactionType = authData.transactionType;
+  await verifyObjectId(invoiceId)
+    .catch(err => { console.error(err); return Promise.reject(0) })
+    .then(async id => {
+      // Get invoice data
+      if(!amount || !invoiceId){
+        return Promise.reject(-1);
+      }
 
-        async function isUpdateAuthorized() {
-          return new Promise(async (resolve, reject) => {
-            if (isAuth) {
-              const transactionLogs = await loadCollections('Transaction_Log');
+      return await invoiceLogs
+        .findOne({
+          '_id': id
+        })
+        .then(result => {
+          if(!!result){
+            return Promise.resolve(result);
+          }else{
+            return Promise.reject(1);
+          }
+        })
+    })
+    .then(invoiceData => {
+      return Promise.all([
+          verifyInvoiceBalance(invoiceData.activity_log_id), 
+          verifyUserBalance(userNum), 
+          verifyInvoiceSessionTime(invoiceData)
+        ])
+        .then(verifyResolves => {
+          let userCreditBalance = verifyResolves[1];
 
-              await transactionLogs
-                .insertOne({
-                  'type': transactionType,
-                  'amount': parseInt(amount),
-                  'date': currTime,
-                  'activity_log_id': authLogId,
-                  'user_num': userNum
-                })
-                .then(data => {
-                  resolve(data);
-                })
-                .catch(err => {
-                  reject(err);
-                })
-            } else {
-              reject(err);
+          return Promise.resolve([userCreditBalance, invoiceData]);
+        })
+        .catch(err => Promise.reject(err));
+    })
+    .then(async data => { 
+      // deducts user credit balance with the amount
+      //TODO: Make this async with updating user's credit balance
+      let creditBalance = data[0];
+      let invoiceData = data[1];
+
+      return await userAccounts
+        .updateOne({
+          'id_num': userNum
+        }, {
+          $set: {
+            'credit': creditBalance - amount
+          }
+        })
+        .then(result => Promise.resolve(invoiceData))
+    })  
+    .then(async invoiceData => {
+      return await transactionLogs
+        .insertOne({
+          amount: amount,
+          date: currTime,
+          invoice_id: invoiceId
+        })
+        .then(async result => {
+          let transactionId = result.insertedId;
+
+          return await transactionLogs
+            .find({
+              'invoice_id': invoiceId
+            })    
+            .toArray()
+            .then(result => {
+              return Promise.resolve(result)
+            })
+            .then(async transactions => {
+              let totalPayments = 0;
+
+              transactions.forEach(transaction => {
+                totalPayments += transaction.amount;
+              })
+
+              if(totalPayments >= invoiceData.amount){
+                return await verifyObjectId(invoiceData.activity_log_id)
+                  .catch(err => {console.error(err); return Promise.reject(0)})
+                  .then(async id => {
+                    return await activityLogs
+                      .updateOne({
+                        '_id': id
+                      }, {
+                        $set: {
+                          'authenticated': true
+                        }
+                      })
+                      .catch(err => { console.error(err); return Promise.reject(0)} )
+                      .then(result => {
+                        return Promise.resolve();
+                      })
+                  })
+              }
+            })
+            .then(result => Promise.resolve(transactionId))
+            .catch(err => Promise.reject(err));
+        })
+        .catch(err => Promise.reject(err));
+    })
+    .then(transactionId => {
+      body.constructBody(transactionId);
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+            break;
+          case 1:
+            body.constructError(4, `Invoice not found.`);
+            break;
+          case 2:
+            body.constructError(4, `Session for the payment on invoice has already expired.`);
+            break;
+          case 3:
+            body.constructError(4, `User account not found.`);
+            break;
+          case 4:
+            body.constructError(4, `Credit balance of the user is not sufficient enough.`);
+            break;
+          case 5:
+            body.constructError(4, `Activity ID for this invoice is not found.`);
+            break;
+          case 6:
+            body.constructError(4, `Invoice has already been paid.`);
+            break;
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
+  
+  async function verifyInvoiceBalance(activityId){
+    return await verifyObjectId(activityId)
+      .catch(err => { console.error(err); return Promise.reject(0) })
+      .then(async id => {
+        return await activityLogs
+          .findOne({
+            '_id': id
+          })
+          .then(result => {
+            if(!!result){
+              return Promise.resolve(result);
+            }else{
+              return Promise.reject(5);
             }
           })
+          .then(activity => {
+            if(activity.authenticated){
+              return Promise.reject(6)
+            }else{
+              return Promise.resolve(true);
+            }
+          })
+          .catch(err => Promise.reject(err));
+      })
+  }
+
+  async function verifyUserBalance(userNum){
+    // checks if user has sufficient credit for the amount to deduct
+    // deducts user's credit with the amount
+    return await userAccounts //TODO: Make this asynchronous with isTimeAuth 
+      .findOne({
+        'id_num': userNum
+      })
+      .then(result => {
+        // get the credit balance
+        // Checks if user has enough credit for the amount
+        if(!!result){
+          let creditBalance = result.credit;
+          if(creditBalance >= amount){
+            return Promise.resolve(creditBalance);
+          }else{
+            return Promise.reject(4);
+          }
+        }else{
+          return Promise.reject(3)
         }
-
-        body.data = {
-          'transaction_authorized': false,
-          'date': currTime
-        };
-        body.success = true;
-
-        isUpdateAuthorized()
-          .then(async result => {
-            body.data.transaction_authorized = true;
-            await activityLogs
-              .updateOne({
-                '_id': new ObjectID(authLogId)
-              }, {
-                $set: {
-                  "authenticated": true
-                }
-              })
-            res.send(body);
-          })
-          .catch(err => {
-            body.success = true;
-            res.send(body);
-          })
       })
-      .catch(bodyError => {
-        res.send(bodyError);
+      .catch(err => Promise.reject(err));
+  }
+
+  async function verifyInvoiceSessionTime(invoice){
+    // Check if invoice session time is within window time of 30 mins
+    let endTime = invoice.date + (60*30); 
+    // invoice time + 30 mins
+    // TODO: store 30 mins in a variable
+
+    return await isTimeAuth(currTime, endTime, true)
+      .then(isAuth => {
+        if(isAuth){
+          return Promise.resolve(true);
+        }else{
+          return Promise.reject(2);
+        }
       })
-  } else {
-    res.send(body);
+      .catch(err => Promise.reject(err));
   }
 });
 
@@ -817,16 +965,12 @@ async function isSessionAuth(userNum, unitNum, hasTimeLeft){
       'unit_num': unitNum
     })
     .catch(err => { console.error(err); return Promise.reject(0)} )
-    .then(result => {
+    .then(async result => {
       if(!!result){
-        let endDate = result.end_date;
-        let timeLeft = endDate - currTime;
-        
-        if(((timeLeft > 0) && hasTimeLeft) || (timeLeft <= 0 && !hasTimeLeft)){
-          return Promise.resolve(true);
-        }else{
-          return Promise.resolve(false);
-        }
+        return await isTimeAuth(currTime, result.end_date, hasTimeLeft)
+          .then(isAuth => {
+            return Promise.resolve(isAuth);
+          })
       }else{
         return Promise.reject(2);
       }
@@ -859,6 +1003,16 @@ async function isActivityAuth(activityId, isAuthenticated){
         .catch(err => Promise.reject(err));
     })
     .catch(err => Promise.reject(err));
+}
+
+async function isTimeAuth(startTime, endTime, hasTimeLeft){
+  let timeLeft = endTime - startTime;
+  
+  if(((timeLeft > 0) && hasTimeLeft) || (timeLeft <= 0 && !hasTimeLeft)){
+    return Promise.resolve(true);
+  }else{
+    return Promise.resolve(false);
+  }
 }
 
 // isFeedAuthorized checks for the authorization in Unit Activity Log 
@@ -1050,23 +1204,6 @@ async function getCurrentSessionMatchId(userNum, unitNum, onGoing, returnTimeLef
         return Promise.reject(err);
       })
   }
-}
-
-async function creditTransactionPayment(transactionId){
-  const transactionLogs = await loadCollections('Transaction_Log');
-
-  await transactionLogs
-    .findOne({
-      '_id': transactionId
-    })
-    .then(async result => {
-      let resultData = await result;
-      if(resultData){
-        let amount = resultData.amount;
-
-        console.log(amount);
-      }
-    })
 }
 
 module.exports = router;
