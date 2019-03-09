@@ -11,6 +11,9 @@ let serverPort;
 global.serverUrl = 'localhost';
 global.serverPort = 27017;
 
+global.baseFee = 5;
+global.sequentialFee = 3;
+
 const app = express();
 
 app.set('superSecret', config.secret);
@@ -41,6 +44,10 @@ global.loadCollections = async function(collectionName) {
   return client.db('Thesis').collection(collectionName);
 }
 
+global.calculateFee = function(hours) {
+  return baseFee + (sequentialFee * hours);
+}
+
 Object.prototype.constructError = function (errorCode, errorMsg) {
   this.success = false;
   if (!this.error_code) {
@@ -56,6 +63,11 @@ Object.prototype.constructError = function (errorCode, errorMsg) {
   if (errorCode === 02) {
     console.error(`Server error: ${errorMsg}`);
   }
+}
+
+Object.prototype.constructBody = function (body) {
+  this.success = true;
+  this.data = body;
 }
 
 Object.prototype.ObjectKeyMapper = function (oldKey, newKey) {
