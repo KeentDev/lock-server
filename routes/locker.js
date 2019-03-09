@@ -997,7 +997,7 @@ router.post('/transaction/end', async (req, res) => {
       
       res.send(body);
     })
-})
+});
 
 async function isSessionAuth(userNum, unitNum, hasTimeLeft){
   const sessionLogs = await loadCollections('Session_Log');
