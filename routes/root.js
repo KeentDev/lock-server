@@ -323,78 +323,7 @@ router.use((req, res, next) => {
 
     return res.status(403).send(body);
   }
-
-
 });
-
-async function getCurrentSessionMatchId(userNum, unitNum, onGoing, returnTimeLeft = false, ongGoingOpt = false){
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const sessionLogs = await loadCollections('Session_Log');
-  const currTime = Math.floor((new Date).getTime()/1000);
-
-  if(!!(userNum && unitNum)){
-    return await rentalInfos
-      .findOne({
-        'user_num': userNum,
-        'unit_num': unitNum,
-        'mode': {
-          $in: ['occupied', 'reserve']
-        }
-      })
-      .then(result => {
-        if(result){
-          let sessionId = null;
-          try{
-            sessionId = result.session_id;
-            sessionId = new ObjectID(sessionId);
-            
-            return Promise.resolve(sessionId);
-          }catch(err){
-            console.error(err);
-            return Promise.reject(1);
-          }
-        }else{
-          return Promise.resolve(false);
-        }
-      })
-      .catch(err => {
-        return Promise.reject(err);
-      })
-      .then(async sessionId => {
-        if(!!sessionId){
-          return await sessionLogs
-            .findOne({
-              '_id': sessionId
-            })
-            .then(result => {
-              if(result){
-                let sessionEndTime = parseFloat(result.end_date);
-                let resolveData;
-                let timeLeft = sessionEndTime - currTime;
-                if((timeLeft > 0) && onGoing || ongGoingOpt){
-                  resolveData = sessionId;
-                }else if((timeLeft <= 0) && !onGoing || ongGoingOpt){
-                  resolveData = sessionId;
-                }else{
-                  resolveData = false;
-                }
-                if(!!resolveData && returnTimeLeft){
-                  resolveData = timeLeft;
-                }
-                return Promise.resolve(resolveData);
-              }else{
-                return Promise.reject(2);
-              }
-            })
-        }else{
-          return Promise.reject(3);
-        }
-      })
-      .catch(err => {
-        return Promise.reject(err);
-      })
-  }
-}
 
 
 module.exports = router;

@@ -13,6 +13,7 @@ global.serverPort = 27017;
 
 global.baseFee = 5;
 global.sequentialFee = 3;
+global.invoiceWindowTime = 30; // in mins
 
 const app = express();
 
@@ -105,7 +106,7 @@ app.use('/user', user);
 app.use('/locker', locker);
 app.use('/stats', statistics);
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 2000;
 
 app.listen(port, function() {
   console.log(`Server has started on port ${port} `);
