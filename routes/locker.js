@@ -1,5 +1,4 @@
 const express = require('express');
-const ObjectID = require('mongodb').ObjectID;
 
 const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
 const activityObj = {
@@ -60,17 +59,17 @@ router.get('/unit-list', async (req, res) => {
           body.data = data;
           body.success = true;
         } else {
-          body.constructError(00, `Area number #${area} not found.`);
+          body.constructError(0, `Area number #${area} not found.`);
         }
 
         res.send(body);
       })
       .catch(err => {
-        body.constructError(02, err);
+        body.constructError(2, err);
         res.send(body);
       })
   } else {
-    body.constructError(01, 'Area number parameter is required.');
+    body.constructError(1, 'Area number parameter is required.');
     res.send(body);
   }
 
@@ -94,7 +93,7 @@ router.get('/area-list', async (req, res) => {
       res.send(body);
     })
     .catch(err => {
-      body.constructError(02, err);
+      body.constructError(2, err);
       res.send(body);
     })
 });
@@ -124,28 +123,26 @@ router.get('/area-info', async (req, res) => {
 
             res.send(body);
           }else{
-            body.constructError(00, `Found no information available on area ID ${id}.`);
+            body.constructError(0, `Found no information available on area ID ${id}.`);
             return Promise.reject();
           }
         })
         .catch(err => {
-          body.constructError(02, err);
+          body.constructError(2, err);
           return Promise.reject();
         })
       })
       .catch(err => {
         console.error(err);
-        body.constructError(03, `Please encode a valid Area ID format and value.`);
+        body.constructError(3, `Please encode a valid Area ID format and value.`);
         console.log(body)
         res.send(body);
         return Promise.resolve();
       });
   }else{
-    body.constructError(01, 'Area ID parameter is required.');
+    body.constructError(1, 'Area ID parameter is required.');
     res.send(body);
   }
-
-  // res.send(body);
 });
 
 router.get('/suggest-unit', async (req, res) => {
@@ -181,17 +178,17 @@ router.get('/suggest-unit', async (req, res) => {
           body.data = bodyData;
           body.success = true;
         } else {
-          body.constructError(00, `No available locker units on Area #${area}.`);
+          body.constructError(0, `No available locker units on Area #${area}.`);
         }
 
         res.send(body);
       })
       .catch(err => {
-        body.constructError(02, err);
+        body.constructError(2, err);
         res.send(body); 
       })
   }else{
-    body.constructError(01, 'Area number parameter is required.');
+    body.constructError(1, 'Area number parameter is required.');
     res.send(body);
   }
 
@@ -199,7 +196,6 @@ router.get('/suggest-unit', async (req, res) => {
 
 router.post('/transaction/authorization', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
   const unitActivities = await loadCollections('Unit_Activity_Logs');
   const sessionLogs = await loadCollections('Session_Log');
 
@@ -214,80 +210,76 @@ router.post('/transaction/authorization', async (req, res) => {
 
   let transActivityType = null;
 
-  let transAuth = async () => {
+  let transAuth = async (userNum, unitNum) => {
     if(!userNum || !unitNum){
       return Promise.reject(-1)
     }
-    switch(transactionType){
-      case 'rent':
-        transActivityType = activityObj.RENT_AUTH;
-  
-        return await rentalInfos
-          .findOne({
-            'user_num': userNum,
-            'unit_num': unitNum
-          })
-          .then(result => {
-            if(!!result){
-              body.success = true;
-              body.data = result;
-              return Promise.reject(1);
-            }else{
-              return Promise.resolve(true);
-            }
-          })
-          .catch(err => {console.error(err); return Promise.reject(0)});
 
-      case 'overdue': 
-        transActivityType = activityObj.OVERDUE_AUTH;
+    if(transactionType == 'rent'){
+      transActivityType = activityObj.RENT_AUTH;
+      return await getRentalData(userNum, unitNum)
+        .then(result => {
+          if(!!result){
+            return Promise.reject(1);
+          }else{
+            return Promise.resolve(true);
+          }
+        })
+        .then(async result => {
+          return await sessionLogs
+            .insertOne({
+              'start_date': null,
+              'end_date': null,
+              'user_num': userNum,
+              'unit_num': unitNum
+            })
+            .then(result => {
+              let sessionId = result.insertedId.toString();
+    
+              return Promise.resolve(sessionId);
+            })
+            .catch(err => {console.error(err); return Promise.reject(0)});
+        })
+        .catch(err => Promise.reject(err));
+    }else if(transactionType == 'overdue'){
+      transActivityType = activityObj.OVERDUE_AUTH;
         
-        return await isSessionAuth(userNum, unitNum, false)
-          .then(isAuth => {
-            if(isAuth){
-              return Promise.resolve(true);
-            }else{
-              return Promise.reject(3);
-            }
-          })
-          .catch(err => Promise.reject(err));
-
-      case 'extend': 
-        transActivityType = activityObj.EXTEND_AUTH;
-
-        return await isSessionAuth(userNum, unitNum, true)
-          .then(isAuth => {
-            if(isAuth){
-              return Promise.resolve(true);
-            }else{
-              return Promise.reject(4);
-            }
-          })
-          .catch(err => Promise.reject(err));
-          
-      case 'reserve':
-        transActivityType = activityObj.RESERVE_AUTH;
-        break;
-      default:
-        transActivityType = null;
+      return await isSessionAuth(userNum, unitNum, false)
+        .then(async isAuth => {
+          if(isAuth){
+            return await getRentalData(userNum, unitNum)
+              .then(result => {
+                return Promise.resolve(result.session_id);
+              })
+              .catch(err => Promise.reject(2));
+          }else{
+            return Promise.reject(3);
+          }
+        })
+        .catch(err => Promise.reject(err));
+    }else if(transactionType == 'extend'){
+      transActivityType = activityObj.EXTEND_AUTH;
+      return await isSessionAuth(userNum, unitNum, true)
+        .then(async isAuth => {
+          if(isAuth){
+            return await getRentalData(userNum, unitNum)
+              .then(result => {
+                return Promise.resolve(result.session_id);
+              })
+              .catch(err => Promise.reject(2));
+          }else{
+            return Promise.reject(4);
+          }
+        })
+        .catch(err => Promise.reject(err));
+    }else if(transactionType == 'reserve'){
+      transActivityType = activityObj.RESERVE_AUTH;
+    }else{
+      transActivityType = null;
     }
   }
 
-  await transAuth()
-    .then(async result => {
-      return await sessionLogs
-        .insertOne({
-          'start_date': null,
-          'end_date': null,
-          'user_num': userNum,
-          'unit_num': unitNum
-        })
-        .then(result => {
-          let sessionId = result.insertedId.toString();
-
-          return Promise.resolve(sessionId);
-        })
-        .catch(err => {console.error(err); return Promise.reject(0)});
-    })
+  await transAuth(userNum, unitNum)
     .then(async sessionId => {
       return await unitActivities
         .insertOne({
@@ -326,6 +318,9 @@ router.post('/transaction/authorization', async (req, res) => {
             break;
           case 4:
             body.constructError(4, `Cannot perform extend service, session has expired.`);
+            break;
+          case 5:
+            body.constructError(4, `Session not found.`);
             break;
         }
       }else{
@@ -427,7 +422,7 @@ router.post('/transaction/feed', async (req, res) => {
 
   let body = {};
 
-  !amount ? body.constructError(01, `Amount parameter is required.`) : null;
+  !amount ? body.constructError(1, `Amount parameter is required.`) : null;
 
   await userAccounts
     .findOne({
@@ -509,9 +504,9 @@ router.post('/transaction/authenticate', async (req, res) => {
   let body = {};
   let promises = [];
 
-  !amount ? body.constructError(01, `Amount parameter is required.`) : null;
-  !userNum ? body.constructError(01, `User Id parameter is required.`) : null;
-  !invoiceId ? body.constructError(01, `Invoice ID parameter is required.`) : null;
+  !amount ? body.constructError(1, `Amount parameter is required.`) : null;
+  !userNum ? body.constructError(1, `User Id parameter is required.`) : null;
+  !invoiceId ? body.constructError(1, `Invoice ID parameter is required.`) : null;
 
   await verifyObjectId(invoiceId)
     .catch(err => { console.error(err); return Promise.reject(0) })
@@ -721,7 +716,6 @@ router.post('/transaction/session', async (req, res) => {
   const unitActivities = await loadCollections('Unit_Activity_Logs');
   const sessionLogs = await loadCollections('Session_Log');
   const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const invoiceLogs = await loadCollections('Invoice');
 
   const activityId = req.body.auth_activity_log_id || req.query.auth_activity_log_id || null;
   const userNum = req.decoded.id_num || null;
@@ -729,128 +723,92 @@ router.post('/transaction/session', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
   let body = {};
 
-  !userNum ? body.constructError(01, `User ID parameter is required.`) : null;
-  !activityId ? body.constructError(01, `Authorization Log ID parameter is required.`) : null;
+  !userNum ? body.constructError(1, `User ID parameter is required.`) : null;
+  !activityId ? body.constructError(1, `Authorization Log ID parameter is required.`) : null;
 
   await isActivityAuth(activityId, true, true)
     .then(async activity => {
-      let sessionId = activity.session_id;
+      let sessionId    = activity.session_id;
       let activityType = activity.type;
       let newActivityType;
+      let invoiceTime  = await getInvoiceTime(activityId);
 
       if(activityAuth.includes(activityType)){
         newActivityType = activitySession[activityAuth.indexOf(activityType)];
       }else{
         return Promise.reject(3);
       }
-
+      // TODO: Make sure no duplication of the same activity type
+      // Adding activity should be the last thing to do
       return await unitActivities
-        .findOne({
+        .insertOne({
           type: newActivityType,
+          date: currTime,
+          authenticated: true,
           session_id: sessionId
         })
         .then(async result => {
-          if(!!result){
-            return Promise.reject(5);
-          }else{
-            return await unitActivities
-              .insertOne({
-                type: newActivityType,
-                date: currTime,
-                authenticated: true,
-                session_id: sessionId
-              })
-              .then(result => {
-                return Promise.resolve(sessionId);
-              })
-          }
-        })
-    })
-    .then(async sessionId => {
-      return await Promise.all([
-        getSessionData(sessionId), 
-        getInvoiceTime(activityId)
-      ])
-      .then(async resolves => {
-        let unitNum = resolves[0][0];
-        let sessionId = resolves[0][1];
-        let hours = resolves[1];
-
-        return await rentalInfos
-          .updateOne({
-            'unit_num': unitNum
-          }, {
-            $set: {
-              user_num: userNum,
-              mode: 'occupied',
-              session_id: sessionId
-            }
-          })
-          .then(result => {
-            return Promise.resolve([sessionId, hours]);
-          })
-      })
-      .catch(err => Promise.reject(err));
-
-      async function getSessionData(sessionId){
-        return await verifyObjectId(sessionId)
-          .catch(err => {console.error(err); return Promise.reject(0)})
-          .then(async id => {
-            return await sessionLogs
-              .findOne({
-                '_id': id
+          if(activityType === activityObj.RENT_AUTH){
+            return await verifyObjectId(sessionId)
+              .catch(err => {console.error(err); return Promise.reject(0)})
+              .then(async id => {
+                return await sessionLogs
+                  .findOne({
+                    '_id': id
+                  })
+                  .then(async session => {
+                    if(!!session){
+                      return Promise.resolve(session);
+                    }else{
+                      return Promise.reject(4);
+                    }
+                  })
+                  .catch(err => Promise.reject(err));
               })
               .then(async session => {
-                if(!!session){
-                  let unitNum = session.unit_num;
-
-                  return Promise.resolve([unitNum, sessionId]);
-                }else{
-                  return Promise.reject(4);
-                }
+                return await rentalInfos
+                  .updateOne({
+                    'unit_num': session.unit_num
+                  }, {
+                    $set: {
+                      user_num  : userNum,
+                      mode      : 'occupied',
+                      session_id: sessionId
+                    }
+                  })
+                  .then(result => {
+                    return Promise.resolve([sessionId, currTime, currTime, invoiceTime]);
+                  })
               })
-          })
-          .catch(err => Promise.reject(err));
-      }
+              .catch(err => Promise.reject(err));
+           
+          }else if(activityType === activityObj.EXTEND_AUTH){
+            return await verifyObjectId(sessionId)
+              .then(async id => {
+                return await sessionLogs
+                  .findOne({
+                    '_id': id
+                  })
+                  .then(session => {
+                    let endTime = session.end_date;
+                    let startTime = session.start_date;
 
-      async function getInvoiceTime(activityId){
-        return await invoiceLogs
-          .findOne({
-            'activity_log_id': activityId
-          })
-          .then(invoice => {
-            if(!!invoice){
-              let hours = invoice.hours;
-
-              return Promise.resolve(hours);
-            }else{
-              return Promise.reject(6);
-            }
-          })
-      }
+                    return Promise.resolve([sessionId, startTime, endTime, invoiceTime]);
+                  })
+              }) 
+          }else if(activityType === activityObj.OVERDUE_AUTH){
+    
+          }
+        })
+        .catch(err => Promise.reject(err));
     })
     .then(async results => {
       let sessionId = results[0];
-      let hours = results[1];
+      let startTime = results[1];
+      let time      = results[2];
+      let hours     = parseInt(results[3]);
 
-      return await verifyObjectId(sessionId)
-        .then(async id => {
-          let endTime = currTime + (60*60*hours);
-
-          return await sessionLogs
-            .updateOne({
-              '_id': id
-            }, {
-              $set: {
-                start_date: currTime,
-                end_date: endTime
-              }
-            })
-            .then(result => {
-              return Promise.resolve(sessionId);
-            })
-        })
-        .catch(err => Promise.reject(err));
+      return await updateSessionEndTime(sessionId, startTime, time, hours);
     })
     .then(sessionId => {
       body.constructBody({
@@ -905,7 +863,7 @@ router.post('/transaction/end', async (req, res) => {
 
   let body = {};
 
-  !sessionId ? body.constructError(01, `Session ID parameter is required.`) : null;
+  !sessionId ? body.constructError(1, `Session ID parameter is required.`) : null;
 
   await verifyObjectId(sessionId)
     .catch(err => {console.error(err); return Promise.reject(0)})
@@ -998,6 +956,65 @@ router.post('/transaction/end', async (req, res) => {
       res.send(body);
     })
 });
+
+async function updateSessionEndTime(sessionId, startTime, endTime, hours){
+  const sessionLogs = await loadCollections('Session_Log');
+
+  return await verifyObjectId(sessionId)
+    .then(async id => {
+      let newEndTime = endTime + (60*60*hours);
+
+      return await sessionLogs
+        .updateOne({
+          '_id': id
+        }, {
+          $set: {
+            start_date: startTime,
+            end_date: newEndTime
+          }
+        })
+        .then(result => {
+          return Promise.resolve(sessionId);
+        })
+    })
+    .catch(err => Promise.reject(err));
+}
+
+async function getInvoiceTime(activityId){
+  const invoiceLogs = await loadCollections('Invoice');
+
+  return await invoiceLogs
+    .findOne({
+      'activity_log_id': activityId
+    })
+    .then(invoice => {
+      if(!!invoice){
+        let hours = invoice.hours;
+
+        return Promise.resolve(hours);
+      }else{
+        return Promise.reject(6);
+      }
+    })
+}
+
+async function getRentalData(userNum, unitNum){
+  const rentalInfos = await loadCollections('Rental_Unit_Info');
+
+  return await rentalInfos
+    .findOne({
+      'user_num': userNum,
+      'unit_num': unitNum
+    })
+    .then(result => {
+      if(!!result){
+        return Promise.resolve(result);
+      }else{
+        return Promise.resolve(false);
+      }
+    })
+    .catch(err => Promise.reject(err));
+}
 
 async function isSessionAuth(userNum, unitNum, hasTimeLeft){
   const sessionLogs = await loadCollections('Session_Log');
