@@ -17,13 +17,15 @@ const activityObj = {
 const activityAuth = [
   activityObj.RENT_AUTH,
   activityObj.EXTEND_AUTH,
-  activityObj.OVERDUE_AUTH
+  activityObj.OVERDUE_AUTH,
+  activityObj.RESERVE_AUTH
 ]
 
 const activitySession = [
   activityObj.RENT_SESSION,
   activityObj.EXTEND_SESSION,
-  activityObj.OVERDUE_SESSION
+  activityObj.OVERDUE_SESSION,
+  activityObj.RESERVE_SESSION
 ]
 
 const router = express.Router();
@@ -241,7 +243,7 @@ router.post('/transaction/authorization', async (req, res) => {
           if(isAuth){
             return await getRentalData(userNum, unitNum)
               .then(result => Promise.resolve(result.session_id))
-              .catch(err => Promise.reject(2));
+              .catch(err => Promise.reject(err));
           }else{
             return Promise.reject(4);
           }
@@ -314,7 +316,7 @@ router.post('/transaction/authorization', async (req, res) => {
             body.constructError(4, `User or Unit is not authorized for this service.`);
             break;
           case 2:
-            body.constructError(4, `Rental info for User and Unit does not exists.`);
+            body.constructError(4, `Rental info for either User and Unit or Unit does not exists.`);
             break;
           case 3:
             body.constructError(4, `Cannot perform overdue service, session is ongoing.`);
@@ -774,8 +776,7 @@ router.post('/transaction/session', async (req, res) => {
         newType = activitySession[activityAuth.indexOf(activityType)];
       }
       // TODO Make sure no duplication of the same activity type
-
-      if(activityType === activityObj.RENT_AUTH){
+      if((activityType === activityObj.RENT_AUTH) || (activityType === activityObj.RESERVE_AUTH)){
         return await verifyObjectId(sessionId)
           .catch(err => {console.error(err); return Promise.reject(0)})
           .then(async id => {
@@ -831,7 +832,7 @@ router.post('/transaction/session', async (req, res) => {
       let sessionId = results[0];
       let startTime = results[1];
       let time      = results[2];
-      let hours     = parseInt(results[3]);
+      let hours     = parseFloat(results[3]);
 
       return await updateSessionEndTime(sessionId, startTime, time, hours);
     })
@@ -1037,13 +1038,53 @@ async function getInvoiceTime(activityId){
 async function getRentalData(userNum, unitNum){
   const rentalInfos = await loadCollections('Rental_Unit_Info');
 
-  return await rentalInfos
-    .findOne({
-      'user_num': userNum,
-      'unit_num': unitNum
-    })
-    .then(result => {
-      return Promise.resolve(result);
+  let userAuth = async (userNum) => {
+    return await rentalInfos
+      .findOne({
+        'user_num': userNum
+      })
+      .then(result => {
+        if(!!result){
+          return Promise.reject(1);
+        }else{
+          return Promise.resolve();
+        }
+      })
+      .catch(err => Promise.reject(err));
+  }
+
+  let unitAuth = async (unitNum) => {
+    return await rentalInfos
+      .findOne({
+        'unit_num': unitNum
+      })
+      .then(result => {
+        if(!!result){
+          let mode = result.mode;
+
+          if(mode == 'available'){
+            return Promise.resolve();
+          }else{
+            return Promise.reject(1);
+          }
+        }else{
+          return Promise.reject(2);
+        }
+      })
+      .catch(err => Promise.reject(err));
+  }
+
+  return await Promise.all([userAuth(userNum), unitAuth(unitNum)])
+    .then(async resolves => {
+      return await rentalInfos
+        .findOne({
+          'user_num': userNum,
+          'unit_num': unitNum
+        })
+        .then(result => {
+          return Promise.resolve(result);
+        })
+        .catch(err => Promise.reject(err));
     })
     .catch(err => Promise.reject(err));
 }
