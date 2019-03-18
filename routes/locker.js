@@ -217,30 +217,8 @@ router.post('/transaction/authorization', async (req, res) => {
 
     if(transactionType == 'rent'){
       transActivityType = activityObj.RENT_AUTH;
-      return await getRentalData(userNum, unitNum)
-        .then(result => {
-          if(!!result){
-            return Promise.reject(1);
-          }else{
-            return Promise.resolve(true);
-          }
-        })
-        .then(async result => {
-          return await sessionLogs
-            .insertOne({
-              'start_date': null,
-              'end_date': null,
-              'user_num': userNum,
-              'unit_num': unitNum
-            })
-            .then(result => {
-              let sessionId = result.insertedId.toString();
-    
-              return Promise.resolve(sessionId);
-            })
-            .catch(err => {console.error(err); return Promise.reject(0)});
-        })
-        .catch(err => Promise.reject(err));
+
+      return await newRentalSession(userNum, unitNum);
     }else if(transactionType == 'overdue'){
       transActivityType = activityObj.OVERDUE_AUTH;
         
@@ -249,7 +227,7 @@ router.post('/transaction/authorization', async (req, res) => {
           if(isAuth){
             return await getRentalData(userNum, unitNum)
               .then(result => Promise.resolve(result.session_id))
-              .catch(err => Promise.reject(2));
+              .catch(err => Promise.reject(err));
           }else{
             return Promise.reject(3);
           }
@@ -257,6 +235,7 @@ router.post('/transaction/authorization', async (req, res) => {
         .catch(err => Promise.reject(err));
     }else if(transactionType == 'extend'){
       transActivityType = activityObj.EXTEND_AUTH;
+
       return await isSessionAuth(userNum, unitNum, true)
         .then(async isAuth => {
           if(isAuth){
@@ -270,9 +249,37 @@ router.post('/transaction/authorization', async (req, res) => {
         .catch(err => Promise.reject(err));
     }else if(transactionType == 'reserve'){
       transActivityType = activityObj.RESERVE_AUTH;
+
+      return await newRentalSession(userNum, unitNum);
     }else{
       transActivityType = null;
     }
+  }
+
+  let newRentalSession = async (userNum, unitNum) => {
+    return await getRentalData(userNum, unitNum)
+      .then(result => {
+        if(!!result){
+          return Promise.reject(1);
+        }else{
+          return Promise.resolve(true);
+        }
+      })
+      .then(async result => {
+        return await sessionLogs
+          .insertOne({
+            'start_date': null,
+            'end_date': null,
+            'user_num': userNum,
+            'unit_num': unitNum
+          })
+          .then(result => {
+            let sessionId = result.insertedId.toString();
+  
+            return Promise.resolve(sessionId);
+          })
+      })
+      .catch(err => Promise.reject(err));
   }
 
   await transAuth(userNum, unitNum)
@@ -304,7 +311,7 @@ router.post('/transaction/authorization', async (req, res) => {
           case 0:
             body.constructError(2, `Please ask the developer for assistance.`);
           case 1:
-            body.constructError(4, `User or Unit is not authorized for rental.`);
+            body.constructError(4, `User or Unit is not authorized for this service.`);
             break;
           case 2:
             body.constructError(4, `Rental info for User and Unit does not exists.`);
@@ -337,15 +344,32 @@ router.post('/transaction/invoice', async (req, res) => {
   const hours = req.body.hours || req.query.hours || null;
 
   let body = {};
+  let invoiceHours;
+  let invoiceAmount;
 
   !activityId ? body.constructError(1, `Authentication Activity ID parameter is required.`) : null;
-  !hours ? body.constructError(1, `Hours parameter is required.`) : null;
 
-  await isActivityAuth(activityId, false)
+  await isActivityAuth(activityId, false, true)
     .then(async result => {
+      let activityData = result;
+      let activityType = activityData.type;
       let totalAmount = calculateFee(hours);
 
-      if(!activityId || !hours){
+      if(activityType == activityObj.RESERVE_AUTH){
+        invoiceHours = .75; // TODO: Set global variable (45min reservation window time)
+        invoiceAmount = 0;
+      }else{
+        !hours ? body.constructError(1, `Hours parameter is required.`) : null;
+
+        if(!hours){
+          return Promise.reject(-1);
+        }
+
+        invoiceHours = hours;
+        invoiceAmount = totalAmount
+      }
+
+      if(!activityId){
         return Promise.reject(-1);
       }
 
@@ -364,8 +388,8 @@ router.post('/transaction/invoice', async (req, res) => {
           return await invoiceLogs 
             .insertOne({
               'activity_log_id': activityId,
-              'hours': hours,
-              'amount': totalAmount,
+              'hours': invoiceHours,
+              'amount': invoiceAmount,
               'date': currTime
             })
             .catch(err => {console.error(err); return Promise.reject(4)})
@@ -374,7 +398,7 @@ router.post('/transaction/invoice', async (req, res) => {
     
               return Promise.resolve({
                 invoice_id: invoiceId,
-                fee: totalAmount
+                fee: invoiceAmount
               });
             })
         })
@@ -494,12 +518,12 @@ router.post('/transaction/authenticate', async (req, res) => {
   const invoiceLogs = await loadCollections('Invoice');
 
   const invoiceId = req.query.invoice_id || req.body.invoice_id || null;
-  const amount = parseInt(req.query.transaction_amount || req.body.transaction_amount) || null;
+  const amount = parseInt(req.query.transaction_amount || req.body.transaction_amount);
+
   const userNum = req.decoded.id_num || null;
 
   let body = {};
-
-  !amount ? body.constructError(1, `Amount parameter is required.`) : null;
+  isNaN(amount) ? body.constructError(1, `Amount parameter is required.`) : null;
   !userNum ? body.constructError(1, `User Id parameter is required.`) : null;
   !invoiceId ? body.constructError(1, `Invoice ID parameter is required.`) : null;
 
@@ -507,7 +531,7 @@ router.post('/transaction/authenticate', async (req, res) => {
     .catch(err => { console.error(err); return Promise.reject(0) })
     .then(async id => {
       // Get invoice data
-      if(!amount || !invoiceId){
+      if(isNaN(amount) || !invoiceId){
         return Promise.reject(-1);
       }
 
@@ -523,7 +547,7 @@ router.post('/transaction/authenticate', async (req, res) => {
           }
         })
     })
-    .then(invoiceData => {
+    .then(async invoiceData => {
       return Promise.all([
           verifyInvoiceBalance(invoiceData.activity_log_id), 
           verifyUserBalance(userNum), 
@@ -577,7 +601,7 @@ router.post('/transaction/authenticate', async (req, res) => {
       res.send(body);
     })
     .catch(errorCode => {
-      if(typeof errorCode === 'number'){
+      if(typeof errorCode == 'number'){
         switch(errorCode){
           case 0:
             body.constructError(2, `Please ask the developer for assistance.`);
@@ -721,7 +745,7 @@ router.post('/transaction/authenticate', async (req, res) => {
       })
       .catch(err => Promise.reject(err));
   }
-});
+}); 
 
 router.post('/transaction/session', async (req, res) => {
   const unitActivities = await loadCollections('Unit_Activity_Logs');
@@ -1019,11 +1043,7 @@ async function getRentalData(userNum, unitNum){
       'unit_num': unitNum
     })
     .then(result => {
-      if(!!result){
-        return Promise.resolve(result);
-      }else{
-        return Promise.resolve(false);
-      }
+      return Promise.resolve(result);
     })
     .catch(err => Promise.reject(err));
 }

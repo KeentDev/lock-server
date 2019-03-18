@@ -339,7 +339,7 @@ router.get('/do/profile', async (req, res) => {
     res.send(body);
   }
 })
-
+  
 router.get('/rental-logs', async (req, res) => {
   const unitActivities = await loadCollections('Unit_Activity_Logs');
   const sessionLogs = await loadCollections('Session_Log');
@@ -402,29 +402,28 @@ router.get('/rental-logs', async (req, res) => {
         res.send(body);
       })
   }
-  
 
-    async function getSessionRentalInfos(sessionId){
-      return await unitActivities
-        .find({
-          'session_id': sessionId
-        })  
-        .toArray()
-        .then(activities => {
-          if(activities){
-            activities.forEach(activity => {
-              activity.ObjectKeyMapper('_id', 'activity_id');
-            });
-            return Promise.resolve(activities);
-          }else{
-            return Promise.reject(1);
-          }
-        })
-        .catch(err => {
-          console.error(err);
-          return Promise.reject(err);
-        })
-    }
+  async function getSessionRentalInfos(sessionId){
+    return await unitActivities
+      .find({
+        'session_id': sessionId
+      })  
+      .toArray()
+      .then(activities => {
+        if(activities){
+          activities.forEach(activity => {
+            activity.ObjectKeyMapper('_id', 'activity_id');
+          });
+          return Promise.resolve(activities);
+        }else{
+          return Promise.reject(1);
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        return Promise.reject(err);
+      })
+  }
 })
 
 router.get('/transaction-logs', async (req, res) => {
