@@ -220,35 +220,61 @@ router.post('/transaction/authorization', async (req, res) => {
     if(transactionType == 'rent'){
       transActivityType = activityObj.RENT_AUTH;
 
-      return await newRentalSession(userNum, unitNum);
+      return await getCurrentSessionID(userNum, unitNum)
+        .catch(async err => {
+          if(err == 2){
+            return await newRentalSession(userNum, unitNum);
+          }else{
+            return Promise.reject(err);
+          }
+        })
+        .then(async sessionId => {
+          return await unitActivities
+            .find({
+              'session_id': sessionId
+            })
+            .toArray()
+        })
+        .then(async activities => {
+          let recentActivity = activities[activities.length - 1];
+          
+          if(!!recentActivity){
+            if(recentActivity.type === activityObj.RESERVE_SESSION){
+              if(recentActivity.authenticated){
+                return await newRentalSession(userNum, unitNum, true);
+              }else{
+                return Promise.reject(8);
+              }
+            }else{
+              return Promise.reject(7)
+            }
+          }else{
+            return Promise.reject(6);
+          }
+        })
+        .catch(err => Promise.reject(err));
     }else if(transactionType == 'overdue'){
       transActivityType = activityObj.OVERDUE_AUTH;
         
-      return await isSessionAuth(userNum, unitNum, false)
-        .then(async isAuth => {
-          if(isAuth){
-            return await getRentalData(userNum, unitNum)
-              .then(result => Promise.resolve(result.session_id))
-              .catch(err => Promise.reject(err));
-          }else{
+      return await getCurrentSessionID(userNum, unitNum, false)
+        .catch(err => {
+          if(err == 1){
             return Promise.reject(3);
+          }else{
+            return Promise.reject(err);
           }
         })
-        .catch(err => Promise.reject(err));
     }else if(transactionType == 'extend'){
       transActivityType = activityObj.EXTEND_AUTH;
 
-      return await isSessionAuth(userNum, unitNum, true)
-        .then(async isAuth => {
-          if(isAuth){
-            return await getRentalData(userNum, unitNum)
-              .then(result => Promise.resolve(result.session_id))
-              .catch(err => Promise.reject(err));
-          }else{
+      return await getCurrentSessionID(userNum, unitNum, true)
+        .catch(err => {
+          if(err == 1){
             return Promise.reject(4);
+          }else{
+            return Promise.reject(err);
           }
         })
-        .catch(err => Promise.reject(err));
     }else if(transactionType == 'reserve'){
       transActivityType = activityObj.RESERVE_AUTH;
 
@@ -258,8 +284,8 @@ router.post('/transaction/authorization', async (req, res) => {
     }
   }
 
-  let newRentalSession = async (userNum, unitNum) => {
-    return await getRentalData(userNum, unitNum, false)
+  let newRentalSession = async (userNum, unitNum, hasReservation = false) => {
+    return await getRentalData(userNum, unitNum, hasReservation)
       .then(async result => {
         return await sessionLogs
           .insertOne({
@@ -319,6 +345,15 @@ router.post('/transaction/authorization', async (req, res) => {
             break;
           case 5:
             body.constructError(4, `Session not found.`);
+            break;
+          case 6:
+            body.constructError(4, `Invalid Session.`);
+            break;
+          case 7:
+            body.constructError(4, `Cannot perform rent service, user already has this current rental unit.`);
+            break;
+          case 8:
+            body.constructError(4, `Cannot perform rent service, reservation process is not yet complete. Please ask the developer for assistance.`);
             break;
         }
       }else{
@@ -1030,7 +1065,6 @@ async function getInvoiceTime(activityId){
 
 async function getRentalData(userNum, unitNum, haveRental = true){
   const rentalInfos = await loadCollections('Rental_Unit_Info');
-
   let userAuth = async (userNum) => {
     return await rentalInfos
       .findOne({
@@ -1040,6 +1074,8 @@ async function getRentalData(userNum, unitNum, haveRental = true){
         if(!!result && haveRental){
           return Promise.resolve();
         }else if(!result && !haveRental){
+          return Promise.resolve();
+        }else{
           return Promise.reject(1);
         }
       })
@@ -1074,13 +1110,20 @@ async function getRentalData(userNum, unitNum, haveRental = true){
           'user_num': userNum,
           'unit_num': unitNum
         })
-        .then(result => Promise.resolve(result))
         .catch(err => {console.error(err); return Promise.reject(-1)})
+        .then(result => {
+          if((!!result && haveRental) || (!result && !haveRental)){
+            return Promise.resolve(result);
+          }else{
+            return Promise.reject(2);
+          }
+        })
+        .catch(err => Promise.reject(err));
     })
     .catch(err => Promise.reject(err));
 }
 
-async function isSessionAuth(userNum, unitNum, hasTimeLeft){
+async function getCurrentSessionID(userNum, unitNum, hasTimeLeft){
   const sessionLogs = await loadCollections('Session_Log');
   const currTime = Math.floor((new Date).getTime()/1000);
 
@@ -1090,8 +1133,14 @@ async function isSessionAuth(userNum, unitNum, hasTimeLeft){
       .findOne({ '_id': id })
       .catch(err => { console.error(err); return Promise.reject(0)})
     )
-    .then(async result => (!!result ? await isTimeAuth(currTime, result.end_date, hasTimeLeft) : Promise.reject(2)))
-    .then(isAuth => Promise.resolve(isAuth))
+    .then(async result =>  (!!result ? Promise.resolve(result) : Promise.reject(2)))
+    .then(async sessionData => {
+      if(await isTimeAuth(currTime, sessionData.end_date, hasTimeLeft)) {
+        return Promise.resolve(sessionData._id.toString());
+      }else{
+        return Promise.reject(1); // wildcard error for session data not found
+      }
+    })
     .catch(err => Promise.reject(err));
 }
 
@@ -1127,7 +1176,7 @@ async function isActivityAuth(activityId, isAuthenticated, returnActivity = fals
 }
 
 // Returns True if has time left otherwise false
-async function isTimeAuth(startTime, endTime, hasTimeLeft){
+async function isTimeAuth(startTime, endTime, hasTimeLeft = true){
   let timeLeft = endTime - startTime;
   
   if(((timeLeft > 0) && hasTimeLeft) || (timeLeft <= 0 && !hasTimeLeft)){
