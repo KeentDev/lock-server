@@ -221,13 +221,6 @@ router.post('/transaction/authorization', async (req, res) => {
       transActivityType = activityObj.RENT_AUTH;
 
       return await getCurrentSessionID(userNum, unitNum)
-        .catch(async err => {
-          if(err == 2){
-            return await newRentalSession(userNum, unitNum);
-          }else{
-            return Promise.reject(err);
-          }
-        })
         .then(async sessionId => {
           return await unitActivities
             .find({
@@ -252,7 +245,13 @@ router.post('/transaction/authorization', async (req, res) => {
             return Promise.reject(6);
           }
         })
-        .catch(err => Promise.reject(err));
+        .catch(async err => {
+          if(err == 2){
+            return await newRentalSession(userNum, unitNum);
+          }else{
+            return Promise.reject(err);
+          }
+        });
     }else if(transactionType == 'overdue'){
       transActivityType = activityObj.OVERDUE_AUTH;
         
@@ -296,7 +295,6 @@ router.post('/transaction/authorization', async (req, res) => {
           })
           .then(result => {
             let sessionId = result.insertedId.toString();
-  
             return Promise.resolve(sessionId);
           })
       })
@@ -1075,7 +1073,9 @@ async function getRentalData(userNum, unitNum, haveRental = true){
           return Promise.resolve();
         }else if(!result && !haveRental){
           return Promise.resolve();
-        }else{
+        }else if(!result){
+          return Promise.reject(2);
+        }else {
           return Promise.reject(1);
         }
       })
