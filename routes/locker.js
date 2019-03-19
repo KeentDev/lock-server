@@ -1084,22 +1084,14 @@ async function isSessionAuth(userNum, unitNum, hasTimeLeft){
   const sessionLogs = await loadCollections('Session_Log');
   const currTime = Math.floor((new Date).getTime()/1000);
 
-  return await sessionLogs
-    .findOne({
-      'user_num': userNum,
-      'unit_num': unitNum
-    })
-    .catch(err => { console.error(err); return Promise.reject(0)} )
-    .then(async result => {
-      if(!!result){
-        return await isTimeAuth(currTime, result.end_date, hasTimeLeft)
-          .then(isAuth => {
-            return Promise.resolve(isAuth);
-          })
-      }else{
-        return Promise.reject(2);
-      }
-    })
+  return await getRentalData(userNum, unitNum)
+    .then(async result => await verifyObjectId(result.session_id))
+    .then(async id => await sessionLogs
+      .findOne({ '_id': id })
+      .catch(err => { console.error(err); return Promise.reject(0)})
+    )
+    .then(async result => (!!result ? await isTimeAuth(currTime, result.end_date, hasTimeLeft) : Promise.reject(2)))
+    .then(isAuth => Promise.resolve(isAuth))
     .catch(err => Promise.reject(err));
 }
 
@@ -1134,6 +1126,7 @@ async function isActivityAuth(activityId, isAuthenticated, returnActivity = fals
     .catch(err => Promise.reject(err));
 }
 
+// Returns True if has time left otherwise false
 async function isTimeAuth(startTime, endTime, hasTimeLeft){
   let timeLeft = endTime - startTime;
   
