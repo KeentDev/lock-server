@@ -259,14 +259,7 @@ router.post('/transaction/authorization', async (req, res) => {
   }
 
   let newRentalSession = async (userNum, unitNum) => {
-    return await getRentalData(userNum, unitNum)
-      .then(result => {
-        if(!!result){
-          return Promise.reject(1);
-        }else{
-          return Promise.resolve(true);
-        }
-      })
+    return await getRentalData(userNum, unitNum, false)
       .then(async result => {
         return await sessionLogs
           .insertOne({
@@ -1035,7 +1028,7 @@ async function getInvoiceTime(activityId){
     })
 }
 
-async function getRentalData(userNum, unitNum){
+async function getRentalData(userNum, unitNum, haveRental = true){
   const rentalInfos = await loadCollections('Rental_Unit_Info');
 
   let userAuth = async (userNum) => {
@@ -1044,10 +1037,10 @@ async function getRentalData(userNum, unitNum){
         'user_num': userNum
       })
       .then(result => {
-        if(!!result){
-          return Promise.reject(1);
-        }else{
+        if(!!result && haveRental){
           return Promise.resolve();
+        }else if(!result && !haveRental){
+          return Promise.reject(1);
         }
       })
       .catch(err => Promise.reject(err));
@@ -1061,8 +1054,8 @@ async function getRentalData(userNum, unitNum){
       .then(result => {
         if(!!result){
           let mode = result.mode;
-
-          if(mode == 'available'){
+          
+          if((mode == 'available' && !haveRental) || (mode == 'occupied' && haveRental)) {
             return Promise.resolve();
           }else{
             return Promise.reject(1);
@@ -1081,10 +1074,8 @@ async function getRentalData(userNum, unitNum){
           'user_num': userNum,
           'unit_num': unitNum
         })
-        .then(result => {
-          return Promise.resolve(result);
-        })
-        .catch(err => Promise.reject(err));
+        .then(result => Promise.resolve(result))
+        .catch(err => {console.error(err); return Promise.reject(-1)})
     })
     .catch(err => Promise.reject(err));
 }
