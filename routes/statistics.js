@@ -170,94 +170,150 @@ router.get('/transaction/college', async (req, res) => {
   
 });
 
-router.get('/overdue-list', async (req, res) => {
+router.get('/overdue-threshold', async (req, res) => {
   const rentalInfos = await loadCollections('Rental_Unit_Info');
   const sessionLogs = await loadCollections('Session_Log');
+
   const currTime = Math.floor((new Date).getTime()/1000);
-  const page_cursor = req.body.page_cursor || req.query.page_cursor || 1;
-  const page_size = req.body.page_size || req.body.page_size || 0;
-  const skip_items = (page_cursor - 1) * page_size;
+
+  const isOverThreshold = req.query.over_threshold || req.body.over_threshold || null;
+
+  !isOverThreshold ? body.constructError(1, `Over threshold parameter is required.`) : null;
 
   let body = {};
-  let overduePromises = [];
 
   await rentalInfos
     .find({
       'mode': 'occupied'
     })
-    .skip(skip_items)
-    .limit(page_size)
     .toArray()
     .then(async results => {
-      if(results){
-        results.forEach(async result => {
-          overduePromises.push(getOverdueStudents(result.session_id));
-        })
-        return Promise.resolve(results);
-      }else{
-        body.data = [];
-        body.success = true;
+      if(!!results){
+        let rentalInfo = results;
+        let overdueUserPromises = [];
 
-        res.send(body);
-        return Promise.reject();
+        rentalInfo.forEach(async rental => {
+          overdueUserPromises.push(filterOverdueUsers(rental.session_id))
+        })
+
+        return await Promise.all(overdueUserPromises.map(p => p.catch((err) => err)))
+          .then(users => {
+            let reducedUsers = [];
+            for(let i = 0; i < users.length; i++) if(!!users[i]) reducedUsers.push(users[i]);
+
+            return Promise.resolve(reducedUsers);
+          })
+      }else{
+        return Promise.resolve();
       }
     })
-    .catch(err => {
-      body.constructError(02, err);
-      res.send(err);
+    .then(users => {
+      if(!!users){
+        return Promise.resolve(users);
+      }else{
+        return Promise.resolve();
+      }
     })
-    .then(async results => {
-      await Promise.all(overduePromises)
-        .then(async overdues => {
-          let overdueStudents = overdues.filter(student => {
-            return student != false;
-          })
-          let students = [];
+    .then(overdueArr => {
+      body.constructBody(overdueArr);
 
-          overdueStudents.forEach(student => {
-            students.push({'user_num': student.user_num, 'end_time': student.end_time})
-          })
-
-          body.data = students;
-          body.success = true;
-
-          res.send(body);
-        })
-        .catch(err => {
-          res.send(err);
-        })
-    })
-    .catch(err => {
-      body.constructError(02, err);
       res.send(body);
     })
-  
-  async function getOverdueStudents(sessionId){
-    return await sessionLogs
-      .findOne({
-        '_id': new ObjectID(sessionId)
-      })
-      .then(session => {
-        if(session){
-          let end_time = session.end_date;
-          let studentId = session.user_num;
-
-          if(currTime > end_time){
-            return Promise.resolve({'user_num': studentId, 'end_time': end_time});
-          }else{
-            return Promise.resolve(false);
-          }
-        }else{
-          body.constructError(02, 'Session not found.');
-          return Promise.reject();
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+          case 1:
+            body.constructError(4, `Session not found for this rental.`);
         }
-      })
-      .catch(err => {
-        body.constructError(02, 'Session not found.');
-        return Promise.reject();
-      })
-  }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
 
-});
+    async function filterOverdueUsers(sessionID) {
+      return await verifyObjectId(sessionID)
+        .then(async id => {
+          return await sessionLogs
+            .findOne({
+              '_id': id
+            })
+        })
+        .then(async sessionData => {
+          if(!!sessionData){
+            const endTime = sessionData.end_date;
+
+            let overThreshold = false;
+
+            if(isOverThreshold === 'true'){
+              overThreshold = true;
+            }else{
+              overThreshold = false;
+            }
+
+            return await isTimeAuth(currTime, endTime, false, overThreshold)
+              .then(async isAuth => {
+                if(isAuth){
+                  const students = await loadCollections('Student_DB');
+
+                  const unitNum = sessionData.unit_num;
+                  const userNum = sessionData.user_num; 
+
+                  let timeSince = endTime - currTime;
+                  timeSince *= -1;
+
+                  if(overThreshold){
+                    const thresholdTime = 60*60*24*5 // TODO: Save in global variable // 5 days
+
+                    timeSince -= thresholdTime;
+                  }
+
+                  return await students
+                    .findOne({
+                      'id_num': userNum
+                    })
+                    .then(result => {
+                      if(!!result){
+                        let student = result;
+                        let userFirstName = capitalizeFirstLetter(student.first_name);
+                        let userLastName = capitalizeFirstLetter(student.last_name);
+
+                        let userData = {
+                          name: {
+                            first_name: userFirstName,
+                            last_name: userLastName,
+                            suppressed_name: `${userFirstName} ${userLastName[0]}.`
+                          },
+                          time_since: timeSince,
+                          unit_num: unitNum
+                        };
+      
+                        return Promise.resolve(userData);
+                      }else{
+                        console.error('Student record not found.');
+                        return Promise.reject(0);
+                      }
+                    })
+                }else{
+                  return Promise.resolve(false);
+                }
+              })
+              .catch(err => {
+                if(err == 1) return Promise.reject(2);
+                return Promise.reject(err);
+              })
+          }else{
+            return Promise.reject(1);
+          }
+        })
+        .catch(err => Promise.reject(err));
+    }
+})
+
+
 
 module.exports = router;

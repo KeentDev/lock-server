@@ -1061,89 +1061,6 @@ async function getInvoiceTime(activityId){
     })
 }
 
-async function getRentalData(userNum, unitNum, haveRental = true){
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  let userAuth = async (userNum) => {
-    return await rentalInfos
-      .findOne({
-        'user_num': userNum
-      })
-      .then(result => {
-        if(!!result && haveRental){
-          return Promise.resolve();
-        }else if(!result && !haveRental){
-          return Promise.resolve();
-        }else if(!result){
-          return Promise.reject(2);
-        }else {
-          return Promise.reject(1);
-        }
-      })
-      .catch(err => Promise.reject(err));
-  }
-
-  let unitAuth = async (unitNum) => {
-    return await rentalInfos
-      .findOne({
-        'unit_num': unitNum
-      })
-      .then(result => {
-        if(!!result){
-          let mode = result.mode;
-          
-          if((mode == 'available' && !haveRental) || (mode == 'occupied' && haveRental)) {
-            return Promise.resolve();
-          }else{
-            return Promise.reject(1);
-          }
-        }else{
-          return Promise.reject(2);
-        }
-      })
-      .catch(err => Promise.reject(err));
-  }
-
-  return await Promise.all([userAuth(userNum), unitAuth(unitNum)])
-    .then(async resolves => {
-      return await rentalInfos
-        .findOne({
-          'user_num': userNum,
-          'unit_num': unitNum
-        })
-        .catch(err => {console.error(err); return Promise.reject(-1)})
-        .then(result => {
-          if((!!result && haveRental) || (!result && !haveRental)){
-            return Promise.resolve(result);
-          }else{
-            return Promise.reject(2);
-          }
-        })
-        .catch(err => Promise.reject(err));
-    })
-    .catch(err => Promise.reject(err));
-}
-
-async function getCurrentSessionID(userNum, unitNum, hasTimeLeft){
-  const sessionLogs = await loadCollections('Session_Log');
-  const currTime = Math.floor((new Date).getTime()/1000);
-
-  return await getRentalData(userNum, unitNum)
-    .then(async result => await verifyObjectId(result.session_id))
-    .then(async id => await sessionLogs
-      .findOne({ '_id': id })
-      .catch(err => { console.error(err); return Promise.reject(0)})
-    )
-    .then(async result =>  (!!result ? Promise.resolve(result) : Promise.reject(2)))
-    .then(async sessionData => {
-      if(await isTimeAuth(currTime, sessionData.end_date, hasTimeLeft)) {
-        return Promise.resolve(sessionData._id.toString());
-      }else{
-        return Promise.reject(1); // wildcard error for session data not found
-      }
-    })
-    .catch(err => Promise.reject(err));
-}
-
 async function isActivityAuth(activityId, isAuthenticated, returnActivity = false){
   const unitActivities = await loadCollections('Unit_Activity_Logs');
 
@@ -1173,17 +1090,6 @@ async function isActivityAuth(activityId, isAuthenticated, returnActivity = fals
         .catch(err => Promise.reject(err));
     })
     .catch(err => Promise.reject(err));
-}
-
-// Returns True if has time left otherwise false
-async function isTimeAuth(startTime, endTime, hasTimeLeft = true){
-  let timeLeft = endTime - startTime;
-  
-  if(((timeLeft > 0) && hasTimeLeft) || (timeLeft <= 0 && !hasTimeLeft)){
-    return Promise.resolve(true);
-  }else{
-    return Promise.resolve(false);
-  }
 }
 
 module.exports = router;
