@@ -12,7 +12,8 @@ const router = express.Router();
 router.post('/rfid/auth', async (req, res) => {
   const rfid_cards = await loadCollections('RFID_Card');
 
-  const serial_id = parseInt(req.query.serial_id || req.body.serial_id) || null;
+
+  const serial_id = parseInt(req.body.serial_id) || null;
   const body = {};
 
   if(serial_id){
@@ -27,7 +28,9 @@ router.post('/rfid/auth', async (req, res) => {
       .then(data => {
         let body = {};
         let bodyData = {};
-        if(data){
+
+        if(!!data){
+          console.log(data);
           if (data.length <= 0) {
             body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
             res.send(body);

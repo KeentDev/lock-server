@@ -165,9 +165,6 @@ router.get('/transaction/college', async (req, res) => {
      res.send(err);
    })
   })
-
-  
-  
 });
 
 router.get('/overdue-threshold', async (req, res) => {
@@ -314,6 +311,35 @@ router.get('/overdue-threshold', async (req, res) => {
     }
 })
 
+router.get('/rental-shares', async (req, res) => {
+  const unitActivities = await loadCollections('Unit_Activity_Logs');
+
+  await unitActivities
+    .aggregate([
+      {$match: {}},
+      {$group: {
+        '_id': '$session_id',
+        types: {
+          $push: '$type'
+        }
+      }}
+    ])
+    .toArray()
+    .then(results => {
+      console.log(results);
+
+      res.send(results);
+    })
+    .catch(err => {
+      console.error(err);
+      res.send(err);
+    })
+
+})
+
+async function getSessionMetaInfo(){
+
+}
 
 
 module.exports = router;
