@@ -10,7 +10,7 @@ const succeedingRateHour = 3;
 const router = express.Router();
 
 router.post('/rfid/auth', async (req, res) => {
-  const rfid_cards = await loadCollections('RFID_Card');
+  const rfid_cards = db.collection('RFID_Card');
 
 
   const serial_id = parseInt(req.body.serial_id) || null;
@@ -52,7 +52,7 @@ router.post('/rfid/auth', async (req, res) => {
           }
         }else{
           body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
-          res.send(body);
+          res.status(401).send(body);
         }
         
       })
@@ -64,7 +64,6 @@ router.post('/rfid/auth', async (req, res) => {
     body.constructError(01, 'A Serial ID parameter is required.');
     res.send(body);
   }
-  
 });
 
 router.get('/esp-test', async (req, res) => {

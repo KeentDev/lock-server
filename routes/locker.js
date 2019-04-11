@@ -1,33 +1,5 @@
 const express = require('express');
 
-const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
-const activityObj = {
-  RENT_AUTH: activityType[0],
-  EXTEND_AUTH: activityType[1],
-  OVERDUE_AUTH: activityType[2],
-  RESERVE_AUTH: activityType[3],
-  RENT_SESSION: activityType[4],
-  EXTEND_SESSION: activityType[5],
-  OVERDUE_SESSION: activityType[6],
-  RESERVE_SESSION: activityType[7],
-  END_SESSION: activityType[8],
-  UNIT_USAGE: activityType[9],
-}
-
-const activityAuth = [
-  activityObj.RENT_AUTH,
-  activityObj.EXTEND_AUTH,
-  activityObj.OVERDUE_AUTH,
-  activityObj.RESERVE_AUTH
-]
-
-const activitySession = [
-  activityObj.RENT_SESSION,
-  activityObj.EXTEND_SESSION,
-  activityObj.OVERDUE_SESSION,
-  activityObj.RESERVE_SESSION
-]
-
 const router = express.Router();
 
 router.get('/unit-list', async (req, res) => {

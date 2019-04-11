@@ -16,6 +16,7 @@ global.sequentialFee = 3;
 global.invoiceWindowTime = 30; // in mins
 
 const app = express();
+global.db;
 
 app.set('superSecret', config.secret);
 
@@ -32,7 +33,7 @@ const statistics = require('./routes/statistics');
 
 global.loadMongoDB = async function() {
   console.log(serverUrl, serverPort);
-  const client = mongodb.MongoClient.connect(`mongodb://${this.serverUrl}:${this.serverPort}`, {
+  const client = mongodb.MongoClient.connect(`mongodb://${this.serverUrl}:${this.serverPort}/Thesis`, {
     useNewUrlParser: true
   });
 
@@ -42,7 +43,7 @@ global.loadMongoDB = async function() {
 global.loadCollections = async function(collectionName) {
   const client = await loadMongoDB();
 
-  return client.db('Thesis').collection(collectionName);
+  return client.collection(collectionName);
 }
 
 global.calculateFee = function(hours) {
@@ -204,6 +205,42 @@ global.getCurrentSessionID = async (userNum, unitNum, hasTimeLeft) => {
 global.capitalizeFirstLetter = (string) => string.toLowerCase().replace(/[^\s]+/g, (match) =>
     match.replace(/^./, (m) => m.toUpperCase()));
 
+global.activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
+global.activityObj = {
+  RENT_AUTH: activityType[0],
+  EXTEND_AUTH: activityType[1],
+  OVERDUE_AUTH: activityType[2],
+  RESERVE_AUTH: activityType[3],
+  RENT_SESSION: activityType[4],
+  EXTEND_SESSION: activityType[5],
+  OVERDUE_SESSION: activityType[6],
+  RESERVE_SESSION: activityType[7],
+  END_SESSION: activityType[8],
+  UNIT_USAGE: activityType[9],
+}
+
+global.baseActivity = [
+  'rent',
+  'extend',
+  'overdue',
+  'reserve'
+]
+
+global.activityAuth = [
+  activityObj.RENT_AUTH,
+  activityObj.EXTEND_AUTH,
+  activityObj.OVERDUE_AUTH,
+  activityObj.RESERVE_AUTH
+]
+
+global.activitySession = [
+  activityObj.RENT_SESSION,
+  activityObj.EXTEND_SESSION,
+  activityObj.OVERDUE_SESSION,
+  activityObj.RESERVE_SESSION
+]
+    
+
 // CORS middleware
 var allowCrossDomain = function(req, res, next) {
   res.header('Access-Control-Allow-Origin', '*');
@@ -222,6 +259,13 @@ app.use('/stats', statistics);
 
 const port = process.env.PORT || 2000;
 
-app.listen(port, function() {
+mongodb.MongoClient.connect(`mongodb://localhost:27017/Thesis`, {
+  useNewUrlParser: true,
+}, (err, client) => {
+  if(err) throw err;
+
+  db = client.db('Thesis');
+
+  app.listen(port);
   console.log(`Server has started on port ${port} `);
-})
+});
