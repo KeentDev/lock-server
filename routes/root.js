@@ -6,14 +6,13 @@ const ObjectID = require('mongodb').ObjectID;
 const baseFee = 5;
 const succeedingRateHour = 3;
 
-
 const router = express.Router();
 
-router.post('/rfid/auth', async (req, res) => {
-  const rfid_cards = await loadCollections('RFID_Card');
+router.get('/rfid/auth', async (req, res) => {
+  const rfid_cards = db.collection('RFID_Card');
 
 
-  const serial_id = parseInt(req.body.serial_id) || null;
+  const serial_id = parseInt(req.body.serial_id || req.query.serial_id) || null;
   const body = {};
 
   if(serial_id){
@@ -30,7 +29,6 @@ router.post('/rfid/auth', async (req, res) => {
         let bodyData = {};
 
         if(!!data){
-          console.log(data);
           if (data.length <= 0) {
             body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
             res.send(body);
@@ -52,7 +50,7 @@ router.post('/rfid/auth', async (req, res) => {
           }
         }else{
           body.constructError(00, `Found no card information available on Serial ID #${serial_id}.`);
-          res.send(body);
+          res.status(401).send(body);
         }
         
       })
@@ -64,12 +62,80 @@ router.post('/rfid/auth', async (req, res) => {
     body.constructError(01, 'A Serial ID parameter is required.');
     res.send(body);
   }
-  
 });
+
+router.post('/login', async (req, res) => {
+  const users = db.collection('Student_DB');
+  const rentalInfos = db.collection('Rental_Unit_Info');
+
+  const idNum = parseInt(req.body.id_num || req.query.id_num);
+  const password = req.body.password || req.query.password;
+
+  let body = {};
+  let hasRental = false;
+
+  await users
+    .findOne({
+      id_num: idNum,
+      password: password
+    })  
+    .then(result => {
+      if(result){
+        const payload = {
+          'id_num': idNum
+        };
+        const token = jwt.sign(payload, config.secret, {
+          expiresIn: '4hr' // expires in 24 hours
+        });
+
+        return Promise.resolve(token);
+        
+      }else {
+        return Promise.reject(1);
+      }
+    })
+    .then(async token => {
+
+      await rentalInfos
+        .findOne({
+          user_num: idNum
+        })
+        .then(result => {
+          if(result){
+            hasRental = true;
+          }else{
+            hasRental = false;
+          }
+        })
+
+      body.constructBody({
+        authorized: true,
+        hasRental,
+        token
+      });
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+          case 1:
+            body.constructError(4, `Invalid login credentials.`);
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
+})
 
 router.get('/esp-test', async (req, res) => {
   console.log('connection success');
-  res.status(200).send('test');
+  res.status(200).send('{SESSION,1,ADD,123456789,1234567890;}');
 });
 
 router.post('/esp-test', async (req, res) => {
@@ -79,10 +145,10 @@ router.post('/esp-test', async (req, res) => {
 });
 
 router.post('/area/gateway', async (req, res) => {
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
-  const lockerUnits = await loadCollections('Locker_Units');
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const rfidCards = await loadCollections('RFID_Card');
+  const unitActivities = db.collection('Unit_Activity_Logs');
+  const lockerUnits = db.collection('Locker_Units');
+  const rentalInfos = db.collection('Rental_Unit_Info');
+  const rfidCards = db.collection('RFID_Card');
 
   const currTime = Math.floor((new Date).getTime()/1000);
 
@@ -296,7 +362,7 @@ router.get('/fee/calculation', async (req, res) => {
   let body = {};
 
   if(hours){
-    let totalAmount = baseFee + (hours*succeedingRateHour);
+    let totalAmount = calculateFee(hours);
     body.success = true;
     body.data = totalAmount;
     res.send(body);
@@ -327,6 +393,7 @@ router.use((req, res, next) => {
     return res.status(403).send(body);
   }
 });
+
 
 
 module.exports = router;

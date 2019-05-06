@@ -1,37 +1,9 @@
 const express = require('express');
 
-const activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
-const activityObj = {
-  RENT_AUTH: activityType[0],
-  EXTEND_AUTH: activityType[1],
-  OVERDUE_AUTH: activityType[2],
-  RESERVE_AUTH: activityType[3],
-  RENT_SESSION: activityType[4],
-  EXTEND_SESSION: activityType[5],
-  OVERDUE_SESSION: activityType[6],
-  RESERVE_SESSION: activityType[7],
-  END_SESSION: activityType[8],
-  UNIT_USAGE: activityType[9],
-}
-
-const activityAuth = [
-  activityObj.RENT_AUTH,
-  activityObj.EXTEND_AUTH,
-  activityObj.OVERDUE_AUTH,
-  activityObj.RESERVE_AUTH
-]
-
-const activitySession = [
-  activityObj.RENT_SESSION,
-  activityObj.EXTEND_SESSION,
-  activityObj.OVERDUE_SESSION,
-  activityObj.RESERVE_SESSION
-]
-
 const router = express.Router();
 
 router.get('/unit-list', async (req, res) => {
-  const lockers = await loadCollections('Locker_Units');
+  const lockers = db.collection('Locker_Units');
   const area = req.body.area_num || null;
 
   let body = {};
@@ -78,7 +50,41 @@ router.get('/unit-list', async (req, res) => {
 });
 
 router.get('/area-list', async (req, res) => {
-  const areas = await loadCollections('Locker_Area');
+  const areas = db.collection('Locker_Area');
+
+  var areaList = {
+    "data": [
+        {
+            "area_num": 1,
+            "area_location": "Beside ASAO",
+            "area_id": "5c1dff3c1673d338540fc26e"
+        },
+        {
+            "area_num": 2,
+            "area_location": "Beside OSA",
+            "area_id": "5c1dff3c1673d338540fc26f"
+        },
+        {
+            "area_num": 3,
+            "area_location": "Beside CET Dean's Office",
+            "area_id": "5c1dff3c1673d338540fc270"
+        },
+        {
+            "area_num": 4,
+            "area_location": "2nd floor Library Lobby",
+            "area_id": "5c1e002f1673d338540fc275"
+        },
+        {
+            "area_num": 5,
+            "area_location": "MM Building",
+            "area_id": "5c471eb97c9fc171dee5ef27"
+        }
+    ],
+    "success": true
+}
+
+areaList.data[0].area_num;
+areaList.data[0].area_location;
 
   let body = {};
   await areas
@@ -101,7 +107,7 @@ router.get('/area-list', async (req, res) => {
 });
 
 router.get('/area-info', async (req, res) => {
-  const areas = await loadCollections('Locker_Area');
+  const areas = db.collection('Locker_Area');
   const areaId = req.body.area_id || req.query.area_id || null;
 
   let body = {};
@@ -148,7 +154,7 @@ router.get('/area-info', async (req, res) => {
 });
 
 router.get('/suggest-unit', async (req, res) => {
-  const lockers = await loadCollections('Locker_Units');
+  const lockers = db.collection('Locker_Units');
   var area = req.body.area_num || req.query.area_num || null;
 
   area = parseInt(area);
@@ -198,8 +204,8 @@ router.get('/suggest-unit', async (req, res) => {
 
 router.post('/transaction/authorization', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
-  const sessionLogs = await loadCollections('Session_Log');
+  const unitActivities = db.collection('Unit_Activity_Logs');
+  const sessionLogs = db.collection('Session_Log');
 
   const unitNum = parseInt(req.body.unit_num) || parseInt(req.query.unit_num) || null;
   const userNum = req.decoded.id_num || null;
@@ -217,41 +223,19 @@ router.post('/transaction/authorization', async (req, res) => {
       return Promise.reject(-1)
     }
 
-    if(transactionType == 'rent'){
+    if(transactionType == 'rent'){ 
       transActivityType = activityObj.RENT_AUTH;
 
-      return await getCurrentSessionID(userNum, unitNum)
+      // TODO: Check if rental auth
+      return await getCurrentSessionID(userNum, unitNum, true, false)
         .then(async sessionId => {
-          return await unitActivities
-            .find({
-              'session_id': sessionId
-            })
-            .toArray()
-        })
-        .then(async activities => {
-          let recentActivity = activities[activities.length - 1];
-          
-          if(!!recentActivity){
-            if(recentActivity.type === activityObj.RESERVE_SESSION){
-              if(recentActivity.authenticated){
-                return await newRentalSession(userNum, unitNum, true);
-              }else{
-                return Promise.reject(8);
-              }
-            }else{
-              return Promise.reject(7)
-            }
-          }else{
-            return Promise.reject(6);
-          }
-        })
-        .catch(async err => {
-          if(err == 2){
+          if(!!sessionId){
             return await newRentalSession(userNum, unitNum);
-          }else{
-            return Promise.reject(err);
+          }else {
+            return Promise.reject('User has current session');
           }
-        });
+        })
+        .catch(err => Promise.reject(err));
     }else if(transactionType == 'overdue'){
       transActivityType = activityObj.OVERDUE_AUTH;
         
@@ -266,7 +250,7 @@ router.post('/transaction/authorization', async (req, res) => {
     }else if(transactionType == 'extend'){
       transActivityType = activityObj.EXTEND_AUTH;
 
-      return await getCurrentSessionID(userNum, unitNum, true)
+      return await getCurrentSessionID(userNum, unitNum, true, true)
         .catch(err => {
           if(err == 1){
             return Promise.reject(4);
@@ -277,28 +261,36 @@ router.post('/transaction/authorization', async (req, res) => {
     }else if(transactionType == 'reserve'){
       transActivityType = activityObj.RESERVE_AUTH;
 
-      return await newRentalSession(userNum, unitNum);
+      // TODO: Check if rental auth
+      return await getCurrentSessionID(userNum, unitNum, false, false)
+        .then(async sessionId => {
+          if(!!sessionId){
+            return await newRentalSession(userNum, unitNum);
+          }else {
+            return Promise.reject('User has current session');
+          }
+        })
+        .catch(err => Promise.reject(err));
     }else{
       transActivityType = null;
     }
   }
 
   let newRentalSession = async (userNum, unitNum, hasReservation = false) => {
-    return await getRentalData(userNum, unitNum, hasReservation)
-      .then(async result => {
-        return await sessionLogs
-          .insertOne({
-            'start_date': null,
-            'end_date': null,
-            'user_num': userNum,
-            'unit_num': unitNum
-          })
-          .then(result => {
-            let sessionId = result.insertedId.toString();
-            return Promise.resolve(sessionId);
-          })
+    return await sessionLogs
+      .insertOne({
+        'start_date': null,
+        'end_date': null,
+        'user_num': userNum,
+        'unit_num': unitNum
       })
-      .catch(err => Promise.reject(err));
+      .then(result => {
+        let sessionId = result.insertedId.toString();
+        return Promise.resolve(sessionId);
+      })
+      .catch(err => {
+        return Promise.reject(err)
+      });
   }
 
   await transAuth(userNum, unitNum)
@@ -364,13 +356,15 @@ router.post('/transaction/authorization', async (req, res) => {
 });
 
 router.post('/transaction/invoice', async (req, res) => {
-  const invoiceLogs = await loadCollections('Invoice');
+  const invoiceLogs = db.collection('Invoice');
+  const sessionLogs = db.collection('Session_Log');
 
+  const isSessionEndOffset = JSON.parse(req.body.session_end_offset || req.query.session_end_offset || null);
   const currTime = Math.floor((new Date).getTime()/1000);
 
   const activityId = req.body.auth_activity_id || req.query.auth_activity_id || null;
-  const hours = req.body.hours || req.query.hours || null;
 
+  let hours = req.body.hours || req.query.hours || null;
   let body = {};
   let invoiceHours;
   let invoiceAmount;
@@ -381,21 +375,51 @@ router.post('/transaction/invoice', async (req, res) => {
     .then(async result => {
       let activityData = result;
       let activityType = activityData.type;
-      let totalAmount = calculateFee(hours);
+      let sessionId = activityData.session_id;
 
       if(activityType == activityObj.RESERVE_AUTH){
-        invoiceHours = .75; // TODO: Set global variable (45min reservation window time)
+        hours = await isSessionEndOffset ? 0.05 : .75; // TODO: Set global variable (3 min end offset period & 45min reservation window time)
         invoiceAmount = 0;
-      }else{
+      } else if(activityType == activityObj.OVERDUE_AUTH) {
+        hours = await verifyObjectId(sessionId)
+          .then(async id => {
+            return await sessionLogs
+              .findOne({
+                _id: id
+              })
+              .then(result => {
+                if(result){
+                  let endTime = result.end_date;
+                  let diffTime = currTime - endTime;
+
+                  if(diffTime > 0) {
+                    return Promise.resolve(diffTime/60/60);
+                  }else {
+                    return Promise.reject('Session is not yet overdue.');
+                  }
+                }else{
+                  return Promise.reject('Session not found.');
+                }
+              })
+              .catch(err => {
+                return Promise.reject(err);
+              });
+          })
+          .catch(err => {
+            return Promise.reject(err);
+          });
+      } else{
         !hours ? body.constructError(1, `Hours parameter is required.`) : null;
 
         if(!hours){
           return Promise.reject(-1);
         }
-
-        invoiceHours = hours;
-        invoiceAmount = totalAmount
       }
+
+      let totalAmount = calculateFee(hours);
+
+      invoiceHours = await hours;
+      invoiceAmount = activityType == activityObj.RESERVE_AUTH ? 0 : totalAmount
 
       if(!activityId){
         return Promise.reject(-1);
@@ -463,7 +487,7 @@ router.post('/transaction/invoice', async (req, res) => {
 });
 
 router.post('/transaction/feed', async (req, res) => {
-  const userAccounts = await loadCollections('RFID_Card');
+  const userAccounts = db.collection('RFID_Card');
 
   let amount = parseInt(req.query.amount || req.body.amount) || null;
   const userNum = req.decoded.id_num || null;
@@ -540,10 +564,10 @@ router.post('/transaction/feed', async (req, res) => {
 
 router.post('/transaction/authenticate', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
-  const activityLogs = await loadCollections('Unit_Activity_Logs');
-  const transactionLogs = await loadCollections('Transaction_Log');
-  const userAccounts = await loadCollections('RFID_Card');
-  const invoiceLogs = await loadCollections('Invoice');
+  const activityLogs = db.collection('Unit_Activity_Logs');
+  const transactionLogs = db.collection('Transaction_Log');
+  const userAccounts = db.collection('RFID_Card');
+  const invoiceLogs = db.collection('Invoice');
 
   const invoiceId = req.query.invoice_id || req.body.invoice_id || null;
   const amount = parseInt(req.query.transaction_amount || req.body.transaction_amount);
@@ -593,7 +617,6 @@ router.post('/transaction/authenticate', async (req, res) => {
             .then(async resolves => {
               let totalPayments = resolves[2];
               let invoiceBal = invoiceAmount - totalPayments;
-
               if(totalPayments >= invoiceAmount){
                 await verifyObjectId(invoiceData.activity_log_id)
                   .catch(err => {console.error(err); return Promise.reject(0)})
@@ -776,11 +799,12 @@ router.post('/transaction/authenticate', async (req, res) => {
 }); 
 
 router.post('/transaction/session', async (req, res) => {
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
-  const sessionLogs = await loadCollections('Session_Log');
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
+  const unitActivities = db.collection('Unit_Activity_Logs');
+  const sessionLogs = db.collection('Session_Log');
+  const rentalInfos = db.collection('Rental_Unit_Info');
 
   const activityId = req.body.auth_activity_log_id || req.query.auth_activity_log_id || null;
+  const hasNextSession = JSON.parse(req.body.next_session || req.query.next_session || null);
   const userNum = req.decoded.id_num || null;
 
   const currTime = Math.floor((new Date).getTime()/1000);
@@ -826,7 +850,7 @@ router.post('/transaction/session', async (req, res) => {
               }, {
                 $set: {
                   user_num  : userNum,
-                  mode      : 'occupied',
+                  mode      : activityType === activityObj.RENT_AUTH ? 'occupied' : 'reserved',
                   session_id: sessionId
                 }
               })
@@ -836,7 +860,7 @@ router.post('/transaction/session', async (req, res) => {
           })
           .catch(err => Promise.reject(err));
        
-      }else if(activityType === activityObj.EXTEND_AUTH){
+      }else if(activityType === activityObj.EXTEND_AUTH || activityType === activityObj.OVERDUE_AUTH){
         return await verifyObjectId(sessionId)
           .then(async id => {
             return await sessionLogs
@@ -844,14 +868,13 @@ router.post('/transaction/session', async (req, res) => {
                 '_id': id
               })
               .then(session => {
-                let endTime = session.end_date;
+                let gracePeriod = hasNextSession ? 3*60 : 0;
+                let endTime = session.end_date + gracePeriod;
                 let startTime = session.start_date;
 
                 return Promise.resolve([sessionId, startTime, endTime, invoiceTime]);
               })
           }) 
-      }else if(activityType === activityObj.OVERDUE_AUTH){
-
       }
     })
     .then(async results => {
@@ -916,9 +939,9 @@ router.post('/transaction/session', async (req, res) => {
 });
 
 router.post('/transaction/end', async (req, res) => {
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const sessionLogs = await loadCollections('Session_Log');
-  const unitActivityLogs = await loadCollections('Unit_Activity_Logs');
+  const rentalInfos = db.collection('Rental_Unit_Info');
+  const sessionLogs = db.collection('Session_Log');
+  const unitActivityLogs = db.collection('Unit_Activity_Logs');
 
   const currTime = Math.floor((new Date).getTime()/1000);
 
@@ -1021,7 +1044,7 @@ router.post('/transaction/end', async (req, res) => {
 });
 
 async function updateSessionEndTime(sessionId, startTime, endTime, hours){
-  const sessionLogs = await loadCollections('Session_Log');
+  const sessionLogs = db.collection('Session_Log');
 
   return await verifyObjectId(sessionId)
     .then(async id => {
@@ -1044,7 +1067,7 @@ async function updateSessionEndTime(sessionId, startTime, endTime, hours){
 }
 
 async function getInvoiceTime(activityId){
-  const invoiceLogs = await loadCollections('Invoice');
+  const invoiceLogs = db.collection('Invoice');
 
   return await invoiceLogs
     .findOne({
@@ -1062,7 +1085,7 @@ async function getInvoiceTime(activityId){
 }
 
 async function isActivityAuth(activityId, isAuthenticated, returnActivity = false){
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
+  const unitActivities = db.collection('Unit_Activity_Logs');
 
   return await verifyObjectId(activityId)
     .catch(err => {console.error(err); return Promise.reject(0)})

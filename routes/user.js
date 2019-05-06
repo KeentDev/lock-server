@@ -18,7 +18,7 @@ const activityObj = {
 const router = express.Router();
 
 router.get('/list', async (req, res) => {
-  const users = await loadCollections('Student_DB');
+  const users = db.collection('Student_DB');
 
   const payload = req.body;
 
@@ -62,9 +62,11 @@ router.get('/list', async (req, res) => {
 });
     
 router.get('/profile', async (req, res) => {
-  const users = await loadCollections('Student_DB');
-  const studentId = parseInt(req.body.student_id || req.query.student_id) || null;
+  const users = db.collection('Student_DB');
+  const studentId = parseInt(req.decoded.id_num) || null;
   const userId = parseInt(req.body.user_id || req.query.user_id) || null;
+  const rentalInfos = db.collection('Rental_Unit_Info');
+  const sessionLogs = db.collection('Session_Log');
 
   let body = {};
 
@@ -142,7 +144,42 @@ router.get('/profile', async (req, res) => {
   }
 
   fetchProfile()
-    .then(body => {
+    .then(async body => {
+      let rentalBody = {};
+      
+      rentalBody = await rentalInfos
+        .findOne({
+          user_num: studentId
+        })
+        .then(async rentalInfos => {
+          if(!!rentalInfos){
+            let sessionId = rentalInfos.session_id;
+
+            return await verifyObjectId(sessionId)
+              .then(async id => {
+                return await sessionLogs
+                  .findOne({
+                    _id: id
+                  })
+                  .then(sessionLog => {
+                    return Promise.resolve({
+                      hasRental: true,
+                      start: sessionLog.start_date,
+                      end: sessionLog.end_date,
+                      unit_num: sessionLog.unit_num,
+                      unit_area: rentalInfos.unit_area
+                    })
+                  })
+              })
+          }else {
+            return Promise.resolve({
+              hasRental: false
+            });
+          }
+        })
+
+      body.rental = await rentalBody;
+
       res.send(body);
     })
     .catch(err => {
@@ -152,7 +189,7 @@ router.get('/profile', async (req, res) => {
 });
 
 router.get('/rental-info', async (req, res) => {
-  const rentalInfos = await loadCollections('Student_Unit_Info');
+  const rentalInfos = db.collection('Student_Unit_Info');
   const userId = req.body.user_id || null;
   const unitId = req.body.unit_id || null;
 
@@ -238,7 +275,7 @@ router.get('/rental-info', async (req, res) => {
 });
 
 router.get('/do/list', async (req, res) => {
-  const officersCollection = await loadCollections('Discipline_Officers');
+  const officersCollection = db.collection('Discipline_Officers');
 
   let body = {};
 
@@ -270,8 +307,8 @@ router.get('/do/list', async (req, res) => {
     });
 })
 
-router.get('/do/profile', async (req, res) => {
-  const officersCollection = await loadCollections('Discipline_Officers');
+router.get  ('/do/profile', async (req, res) => {
+  const officersCollection = db.collection('Discipline_Officers');
 
   let officerId = req.body.officer_id || null;
   let userId = req.body.user_id || null;
@@ -341,8 +378,8 @@ router.get('/do/profile', async (req, res) => {
 })
   
 router.get('/rental-logs', async (req, res) => {
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
-  const sessionLogs = await loadCollections('Session_Log');
+  const unitActivities = db.collection('Unit_Activity_Logs');
+  const sessionLogs = db.collection('Session_Log');
 
   const userNum = req.body.user_num || req.query.user_num || null;
   const page_cursor = req.body.page_cursor || req.query.page_cursor || 1;
@@ -428,14 +465,14 @@ router.get('/rental-logs', async (req, res) => {
 
 router.get('/transaction-logs', async (req, res) => {
   const currTime = Math.floor((new Date).getTime()/1000);
-  const transactionLogs = await loadCollections('Transaction_Log');
-  const sessionLogs = await loadCollections('Session_Log');
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
+  const transactionLogs = db.collection('Transaction_Log');
+  const sessionLogs = db.collection('Session_Log');
+  const unitActivities = db.collection('Unit_Activity_Logs');
+  const rentalInfos = db.collection('Rental_Unit_Info');
 
   const userNum = req.body.user_num || req.query.user_num || null;
   const page_cursor = req.body.page_cursor || req.query.page_cursor || 1;
-  const page_size = req.body.page_size || req.body.page_size || 0;
+  const page_size = parseInt(req.body.page_size || req.body.page_size || 0);
   const skip_items = (page_cursor - 1) * page_size;
 
   let body = {};
@@ -615,7 +652,7 @@ router.get('/transaction-logs', async (req, res) => {
 })
 
 router.get('/search', async (req, res) => {
-  const students = await loadCollections('Student_DB');
+  const students = db.collection('Student_DB');
 
   const userNum = req.body.user_num || req.query.user_num || null;
   const userName = req.body.user_name || req.query.user_name || null;

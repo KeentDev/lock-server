@@ -4,8 +4,9 @@ const ObjectID = require('mongodb').ObjectID;
 
 const router = express.Router();
 
+
 router.get('/transaction/summary', async (req, res) => {
-  const transactionLogs = await loadCollections('Transaction_Log');
+  const transactionLogs = db.collection('Transaction_Log');
 
   const query = req.query;
   const reqBody = req.body;
@@ -108,6 +109,7 @@ router.get('/transaction/college', async (req, res) => {
       })
       .catch(err => {
         console.log(err);
+        return Promise.reject(err);
       })
       .then(userCollege => {  
         let logType = log.type;
@@ -168,8 +170,8 @@ router.get('/transaction/college', async (req, res) => {
 });
 
 router.get('/overdue-threshold', async (req, res) => {
-  const rentalInfos = await loadCollections('Rental_Unit_Info');
-  const sessionLogs = await loadCollections('Session_Log');
+  const rentalInfos = db.collection('Rental_Unit_Info');
+  const sessionLogs = db.collection('Session_Log');
 
   const currTime = Math.floor((new Date).getTime()/1000);
 
@@ -255,7 +257,7 @@ router.get('/overdue-threshold', async (req, res) => {
             return await isTimeAuth(currTime, endTime, false, overThreshold)
               .then(async isAuth => {
                 if(isAuth){
-                  const students = await loadCollections('Student_DB');
+                  const students = db.collection('Student_DB');
 
                   const unitNum = sessionData.unit_num;
                   const userNum = sessionData.user_num; 
@@ -309,37 +311,345 @@ router.get('/overdue-threshold', async (req, res) => {
         })
         .catch(err => Promise.reject(err));
     }
-})
+});
 
 router.get('/rental-shares', async (req, res) => {
-  const unitActivities = await loadCollections('Unit_Activity_Logs');
+  let collegeShares = {};
+  let servicesStats = {};
+  let areaStats = {};
 
-  await unitActivities
-    .aggregate([
-      {$match: {}},
+  let servicesStatsSample = {
+    'rent': {
+      num: 0,
+      hours: 0
+    },
+    'reserve': {
+      num: 0,
+      hours: 0
+    },
+    'extend': {
+      num: 0,
+      hours: 0
+    },
+    'overdue': {
+      num: 0,
+      hours: 0
+    }
+  }
+
+  let areaStatsSample = {
+    '1': {
+      total_session_hours: 0,
+      college: {
+        'CBA': {
+          session_hours: 0,
+        },
+        'CET': {  
+          session_hours: 0,
+        }
+      }
+    },
+    '2': {
+      total_session_hours: 0,
+      college: {
+        'CBA': {
+          session_hours: 0,
+        },
+        'CET': {
+          session_hours: 0,
+        }
+      }
+    }
+  }
+
+  let collegeSharesSample = {
+    'CBA': {
+      sessions: 0,
+      usage_hours: 0
+    },
+    'CET': {
+      sessions: 0,
+      usage_hours: 0
+    },
+  }
+
+  let unitSharesSample = [{
+      unit_num: 1,
+      sessions: 0,
+      collegeShares: [{
+        college: 'CBA',
+        sessions: 0
+      },{
+        college: 'CET',
+        sessions: 0
+      }]
+    },{
+      unit_num: 1,
+      sessions: 0,
+      collegeShares: [{
+        college: 'CBA',
+        sessions: 0
+      },{
+        college: 'CET',
+        sessions: 0
+      }]
+  }];
+
+  db.collection('Unit_Activity_Logs')
+    .aggregate([  
+      {$match: {
+        authenticated: true, 
+        type: /\w+_auth$(?![\r\n])/,
+      }},
+      {$project: {date: 0}},
       {$group: {
         '_id': '$session_id',
-        types: {
-          $push: '$type'
+        services: {
+          $push: {type: '$type', activity_id: '$_id'}
         }
-      }}
+      }},
     ])
+    .hint({session_id: 1})
     .toArray()
-    .then(results => {
-      console.log(results);
+    .then(async results => {
+      if(!!results){
+        let sessions = results;
+        let promises = [];
+        for(let i = 0; i < sessions.length; i++){
+          let session = sessions[i];
+          promises.push(await getSessionMetaData(session));
+        }
 
-      res.send(results);
+        return await Promise.all(promises)
+          .then(resolves => {
+            return Promise.resolve(resolves);
+          })
+          .catch(err => Promise.reject(err));
+      }else{
+        return Promise.resolve();
+      }
+    })
+    .then(sessions => {
+      for(var i = 0; i < sessions.length; i++){
+        let session = sessions[i];
+        let college = session.user_info.college;
+        let activities = session.activities;
+        let unit = session.unit;
+        let unitArea = unit.area;
+
+        for(var o = 0; o < activities.length; o++){
+          let activity = activities[o];
+          let type = activity.type;
+
+          if(!(type in servicesStats)){
+            servicesStats[type] = {
+              num: 0,
+              usage_hours: 0
+            }
+          }
+
+          servicesStats[type].num++;
+          servicesStats[type].usage_hours += (activity.metadata.hours);
+        }
+
+        if(!(unitArea in areaStats)){
+          areaStats[unitArea] = {};
+          areaStats[unitArea][college] = {
+            session_hours: 0
+          };
+        }
+
+        if(!(college in areaStats[unitArea])){
+          areaStats[unitArea][college] = {
+            session_hours: 0
+          };
+        }
+
+        areaStats[unitArea][college].session_hours += (session.usage_hours/60/60);
+
+        if(!(college in collegeShares)){
+          collegeShares[college] = {
+            session: 0,
+            usage_hours: 0
+          };
+        }
+
+        collegeShares[college].session++;
+        collegeShares[college].usage_hours += (session.usage_hours/60/60);
+      };
+      
+      res.send(sessions);
     })
     .catch(err => {
       console.error(err);
       res.send(err);
     })
-
 })
 
-async function getSessionMetaInfo(){
+let getSessionMetaData = async (session) => {
+  let sessionId = session._id;
+  let activities = session.services;
+  let activityMetadataPromises = [];
+  let activityTypes = [];
+  console.log(session);
 
+  for(let i = 0; i < activities.length; i++){
+    let activity = activities[i];
+    let activityId = activity.activity_id;
+    let activityName = activity.type;
+
+    activityTypes.push(activityTypeParser(activityName));
+    activityMetadataPromises.push(await getInvoiceMetadata(activityId.toString()));
+  }
+
+  return await Promise.all(activityMetadataPromises)
+    .then(async results => {
+      let activities = [];
+      let metadata = results;
+
+      for(let i = 0; i < metadata.length; i++){
+        activities[i] = {
+          type: activityTypes[i],
+          metadata: metadata[i]
+        }
+      }
+      return await Promise.all([
+        await getSessionUsageTime(sessionId), 
+        await getUserDataBySession(sessionId),
+        await getUnitInfoBySession(sessionId),
+      ])
+        .then(resolves => {
+          let usageTime = resolves[0];
+          let userData = resolves[1];
+          let unitInfo = resolves[2];
+
+          return Promise.resolve({
+            session_id: sessionId,
+            activities: activities,
+            usage_hours: usageTime,
+            unit: unitInfo,
+            user_info: userData
+          });
+        })
+    })
+    .catch(err => Promise.reject(err));
 }
 
+let getInvoiceMetadata = async (activityId) => {
+  const invoices = db.collection('Invoice');
+  
+  return await invoices
+    .findOne({
+      activity_log_id: activityId
+    }, {
+      projection: {
+        hours: 1,
+        amount: 1
+      }
+    })
+    .then(result => {
+      if(!!result){
+        let invoice = result;
+        return Promise.resolve({
+          hours: parseFloat(invoice.hours),
+          amount: invoice.amount
+        })
+      }else{
+        return Promise.reject();
+      }
+    })
+}
+
+let activityTypeParser = (name) => {
+  return baseActivity[activityAuth.indexOf(name)];
+}
+
+let getSessionUsageTime = async (sessionId) => {
+  const sessionLogs = await db.collection('Session_Log');
+  return await verifyObjectId(sessionId)
+    .then(async id => {
+      return await sessionLogs
+        .findOne({
+          '_id': id
+        })
+        .then(result => {
+          let session = result;
+          
+          return session.end_date - session.start_date;
+        })
+        .catch(err => Promise.reject(err));
+    })
+    .catch(err => Promise.reject(err));
+}
+
+let getUserDataBySession = async (sessionID) => {
+  const students = db.collection('Student_DB');
+  const sessions = db.collection('Session_Log');
+  return verifyObjectId(sessionID)
+    .then(async id => {
+      return await sessions
+        .findOne({
+          '_id': id
+        })
+    })
+    .then(async session => {
+      let userNum = session.user_num;
+
+      return await students
+        .findOne({
+          'id_num': userNum
+        }, {
+          projection: {
+            college: 1
+          }
+        })
+        .then(result => {
+          return Promise.resolve({
+            id_num: userNum,
+            college: result.college
+          });
+        })
+    })
+    .catch(err => Promise.reject(err));
+}
+
+let getUnitInfoBySession = async (sessionId) => {
+  const rentalInfos = db.collection('Rental_Unit_Info');
+  const sessions = db.collection('Session_Log');
+
+  return verifyObjectId(sessionId)
+    .then(async id => {
+      return await sessions
+        .findOne({
+          '_id': id
+        }, {
+          projection: {
+            unit_num: 1
+          }
+        })
+    })
+    .then(async session => {
+      let unitNum = session.unit_num;
+      return await rentalInfos
+        .findOne({
+          unit_num: unitNum
+        }, {
+          projection: {
+            unit_area: 1
+          }
+        })
+        .then(result => {
+          if(result){
+            return {
+              num: unitNum,
+              area: result.unit_area
+            }
+          }else {
+            console.error(`Area for Unit #${unitNum} not found.`)
+          }
+        })
+    })
+    .catch(err => Promise.reject(err));
+}
 
 module.exports = router;
