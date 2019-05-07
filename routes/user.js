@@ -67,6 +67,8 @@ router.get('/profile', async (req, res) => {
   const userId = parseInt(req.body.user_id || req.query.user_id) || null;
   const rentalInfos = db.collection('Rental_Unit_Info');
   const sessionLogs = db.collection('Session_Log');
+  const lockerAreas = db.collection('Locker_Area');
+  const rfidCards = db.collection("RFID_Card");
 
   let body = {};
 
@@ -147,37 +149,64 @@ router.get('/profile', async (req, res) => {
     .then(async body => {
       let rentalBody = {};
       
-      rentalBody = await rentalInfos
+      return await rentalInfos
         .findOne({
           user_num: studentId
         })
         .then(async rentalInfos => {
-          if(!!rentalInfos){
-            let sessionId = rentalInfos.session_id;
+          return await rfidCards
+            .findOne({
+              id_num: studentId
+            })
+            .then(res => {
+              return Promise.resolve(res.credit)
+            })
+            .then(async creditBalance => {
+              if(!!rentalInfos){
+                let sessionId = rentalInfos.session_id;
 
-            return await verifyObjectId(sessionId)
-              .then(async id => {
-                return await sessionLogs
-                  .findOne({
-                    _id: id
+                let hasReservation = false;
+                
+                if(rentalInfos.mode == 'reserved'){
+                  hasReservation = true;
+                }
+                return await verifyObjectId(sessionId)
+                  .then(async id => {
+                    return await sessionLogs
+                      .findOne({
+                        _id: id
+                      })
+                      .then(async sessionLog => {
+                        return Promise.resolve({
+                          hasRental: true,
+                          start: sessionLog.start_date,
+                          end: sessionLog.end_date,
+                          unit_num: sessionLog.unit_num,
+                          unit_area: rentalInfos.unit_area,
+                          session_id: sessionId,
+                          user_balance: creditBalance,
+                          hasReservation: hasReservation
+                        })
+                      })
+                      .then(async rentalInfo => {
+                        return await lockerAreas
+                          .findOne({ area_num: rentalInfo.unit_area })
+                          .then(area => {
+                            rentalInfo.unit_area_location = area.area_location;
+                            return Promise.resolve(rentalInfo);
+                          })
+                      })
                   })
-                  .then(sessionLog => {
-                    return Promise.resolve({
-                      hasRental: true,
-                      start: sessionLog.start_date,
-                      end: sessionLog.end_date,
-                      unit_num: sessionLog.unit_num,
-                      unit_area: rentalInfos.unit_area
-                    })
-                  })
-              })
-          }else {
-            return Promise.resolve({
-              hasRental: false
-            });
-          }
+              }else {
+                return Promise.resolve({
+                  hasRental: false,
+                  user_balance: creditBalance
+                });
+              }
+            })
         })
-
+    })
+    .then(async rentalBody => {
       body.rental = await rentalBody;
 
       res.send(body);

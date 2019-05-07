@@ -52,43 +52,14 @@ router.get('/unit-list', async (req, res) => {
 router.get('/area-list', async (req, res) => {
   const areas = db.collection('Locker_Area');
 
-  var areaList = {
-    "data": [
-        {
-            "area_num": 1,
-            "area_location": "Beside ASAO",
-            "area_id": "5c1dff3c1673d338540fc26e"
-        },
-        {
-            "area_num": 2,
-            "area_location": "Beside OSA",
-            "area_id": "5c1dff3c1673d338540fc26f"
-        },
-        {
-            "area_num": 3,
-            "area_location": "Beside CET Dean's Office",
-            "area_id": "5c1dff3c1673d338540fc270"
-        },
-        {
-            "area_num": 4,
-            "area_location": "2nd floor Library Lobby",
-            "area_id": "5c1e002f1673d338540fc275"
-        },
-        {
-            "area_num": 5,
-            "area_location": "MM Building",
-            "area_id": "5c471eb97c9fc171dee5ef27"
-        }
-    ],
-    "success": true
-}
-
-areaList.data[0].area_num;
-areaList.data[0].area_location;
-
   let body = {};
   await areas
-    .find({})
+    .find({}, {
+      projection: {
+        'area_id': 0,
+        '_id': 0
+      }
+    })
     .toArray()
     .then(data => {
       for (let i = 0; i < data.length; i++) {
@@ -143,7 +114,6 @@ router.get('/area-info', async (req, res) => {
       .catch(err => {
         console.error(err);
         body.constructError(3, `Please encode a valid Area ID format and value.`);
-        console.log(body)
         res.send(body);
         return Promise.resolve();
       });
@@ -154,7 +124,7 @@ router.get('/area-info', async (req, res) => {
 });
 
 router.get('/suggest-unit', async (req, res) => {
-  const lockers = db.collection('Locker_Units');
+  const rentalInfos = db.collection('Rental_Unit_Info');
   var area = req.body.area_num || req.query.area_num || null;
 
   area = parseInt(area);
@@ -162,13 +132,14 @@ router.get('/suggest-unit', async (req, res) => {
   let body = {};
 
   if(area){
-    await lockers
+    await rentalInfos
       .find({
         'unit_area': area,
-        'unit_status': 'available'
+        'mode': 'available'
       }, {
         projection: {
-          'slave_address': 0
+          'unit_num': 1,
+          '_id': 0 
         }
       })
       .toArray()
@@ -179,14 +150,24 @@ router.get('/suggest-unit', async (req, res) => {
           let max = data.length - 1;
           let min = 0;
           let randomIndex = Math.floor(Math.random()*(max-min+1)+min); 
-          let bodyData = data[randomIndex];
+          let availUnits = [];
+          let suggestedUnit;
 
-          bodyData.ObjectKeyMapper('_id', 'unit_id');
+          for(let i = 0; i < data.length; i++){
+            availUnits.push(data[i].unit_num);
+          }
 
-          body.data = bodyData;
-          body.success = true;
+          suggestedUnit = availUnits[randomIndex];
+          availUnits.splice(randomIndex, 1);
+
+          bodyData = {
+            suggested_unit: suggestedUnit,
+            other_avail_units: availUnits
+          }
+
+          body.constructBody(bodyData);
         } else {
-          body.constructError(0, `No available locker units on Area #${area}.`);
+          body.constructBody({suggested_unit: null});
         }
 
         res.send(body);
@@ -826,6 +807,7 @@ router.post('/transaction/session', async (req, res) => {
         newType = activitySession[activityAuth.indexOf(activityType)];
       }
       // TODO Make sure no duplication of the same activity type
+      console.log('activity type', activityType);
       if((activityType === activityObj.RENT_AUTH) || (activityType === activityObj.RESERVE_AUTH)){
         return await verifyObjectId(sessionId)
           .catch(err => {console.error(err); return Promise.reject(0)})

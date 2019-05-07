@@ -79,7 +79,7 @@ router.get('/transaction/college', async (req, res) => {
     }
   })
   .catch(err => {
-    console.log(err);
+    console.error(err);
     res.send(err);
   })
   .then(async data => {
@@ -108,7 +108,7 @@ router.get('/transaction/college', async (req, res) => {
         }
       })
       .catch(err => {
-        console.log(err);
+        console.error(err);
         return Promise.reject(err);
       })
       .then(userCollege => {  
@@ -313,7 +313,9 @@ router.get('/overdue-threshold', async (req, res) => {
     }
 });
 
-router.get('/rental-shares', async (req, res) => {
+router.post('/rental-shares', async (req, res) => {
+  const sessionIds = req.body.session_ids || [/.*/];
+
   let collegeShares = {};
   let servicesStats = {};
   let areaStats = {};
@@ -400,6 +402,9 @@ router.get('/rental-shares', async (req, res) => {
       {$match: {
         authenticated: true, 
         type: /\w+_auth$(?![\r\n])/,
+        session_id: {
+        $in: sessionIds
+        }
       }},
       {$project: {date: 0}},
       {$group: {
@@ -415,6 +420,7 @@ router.get('/rental-shares', async (req, res) => {
       if(!!results){
         let sessions = results;
         let promises = [];
+
         for(let i = 0; i < sessions.length; i++){
           let session = sessions[i];
           promises.push(await getSessionMetaData(session));
@@ -481,9 +487,47 @@ router.get('/rental-shares', async (req, res) => {
       res.send(sessions);
     })
     .catch(err => {
-      console.error(err);
+      console.error('error', err);
       res.send(err);
     })
+})
+
+router.get('/user/sessions', async(req, res) => {
+  const sessionLogs = db.collection('Session_Log');
+
+  const userNum = req.decoded.id_num || null;
+
+  let body = {};
+
+  await sessionLogs
+    .find({
+      user_num: userNum
+    })
+    .toArray()
+    .then(results => {
+      return Promise.resolve(results);
+    })
+    .then(sessions => {
+      body.constructBody(sessions);
+
+      res.send(body);
+    })
+    .catch(errorCode => {
+      if(typeof errorCode === 'number'){
+        switch(errorCode){
+          case 0:
+            body.constructError(2, `Please ask the developer for assistance.`);
+          case 1:
+            body.constructError(4, `No sessions yet.`);
+        }
+      }else{
+        console.error(errorCode);
+        body.constructError(2, `Please ask the developer for assistance.`);
+      }
+      
+      res.send(body);
+    })
+
 })
 
 let getSessionMetaData = async (session) => {
@@ -491,7 +535,6 @@ let getSessionMetaData = async (session) => {
   let activities = session.services;
   let activityMetadataPromises = [];
   let activityTypes = [];
-  console.log(session);
 
   for(let i = 0; i < activities.length; i++){
     let activity = activities[i];
