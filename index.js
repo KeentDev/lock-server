@@ -5,8 +5,13 @@ const morgan = require('morgan');
 const config = require('./config');
 const mongodb = require('mongodb');
 const ObjectID = require('mongodb').ObjectID;
+const axios = require('axios');
+const areaServerUrls = ['192.168.254.103', '192.168.254.102'];
+const http = axios.create({
+  timeout: 15000,
+});
 let serverUrl;
-let serverPort;
+let serverPort; 
 
 global.serverUrl = 'localhost';
 global.serverPort = 27017;
@@ -267,6 +272,53 @@ global.getCurrentSessionID = async (userNum, unitNum, hasTimeLeft, haveRental = 
 global.capitalizeFirstLetter = (string) => string.toLowerCase().replace(/[^\s]+/g, (match) =>
     match.replace(/^./, (m) => m.toUpperCase()));
 
+global.sendToUnit = (areaNum, unitNum, sessionMode, sessionData) => {
+  const serverDelimiter = 'ZZ';
+  const areaDelimiter = ';';
+  const sessionDataDelimiter = ',';
+  const callbackErrorRepeatTimes = 10;
+  const callbackSuccessRepeatTimes = 2;
+  let successsCallbackCount = 0;
+  let errorCallbackCount = 0;
+
+  let sessionDataString = '';
+  let requestUrl = '';
+
+  for(let i = 0; i < sessionData.length; i++){
+    sessionDataString += sessionData[i];
+    if(i != sessionData.length - 1){
+      sessionDataString += sessionDataDelimiter;
+    }
+  }
+
+  const sessionBlock = `${sessionMode}${sessionDataDelimiter}${sessionDataString}`;
+  const requestParams = `${serverDelimiter}SESSION${sessionDataDelimiter}${sessionBlock}${areaDelimiter}${serverDelimiter}`;
+
+  requestUrl = `${areaServerUrls[areaNum - 1]}?session=${requestParams}`;
+
+  function sendRequest(callback) {
+    http.get(requestUrl)
+      .then(res => {
+        console.log(`Feedback from area #${areaNum}.`, res);
+        successsCallbackCount++;
+        if(successsCallbackCount < callbackSuccessRepeatTimes){
+          sendRequest();
+        }
+      })
+      .catch(err => {
+        console.error('Error on communicating with the Area server.', err.errno, errorCallbackCount);
+        errorCallbackCount++;
+        if(errorCallbackCount < callbackErrorRepeatTimes){
+          sendRequest();
+        }
+      })
+  }
+
+  sendRequest();
+
+  console.log(requestUrl);
+}
+  
 global.activityType = ['rent_auth', 'extend_auth', 'overdue_auth','reserve_auth' , 'rent_session', 'extend_session', 'overdue_session', 'reserve_session', 'end_session', 'unit_usage'];
 global.activityObj = {
   RENT_AUTH: activityType[0],
@@ -329,5 +381,6 @@ mongodb.MongoClient.connect(`mongodb://localhost:27017/Thesis`, {
   db = client.db('Thesis');
 
   app.listen(port);
+
   console.log(`Server has started on port ${port} `);
 });
