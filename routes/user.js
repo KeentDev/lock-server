@@ -70,6 +70,8 @@ router.get('/profile', async (req, res) => {
   const lockerAreas = db.collection('Locker_Area');
   const rfidCards = db.collection("RFID_Card");
 
+  const currTime = Math.floor((new Date).getTime()/1000);
+
   let body = {};
 
   fetchProfile = async () => {
@@ -162,6 +164,7 @@ router.get('/profile', async (req, res) => {
               return Promise.resolve(res.credit)
             })
             .then(async creditBalance => {
+              
               if(!!rentalInfos){
                 let sessionId = rentalInfos.session_id;
 
@@ -177,16 +180,24 @@ router.get('/profile', async (req, res) => {
                         _id: id
                       })
                       .then(async sessionLog => {
-                        return Promise.resolve({
-                          hasRental: true,
-                          start: sessionLog.start_date,
-                          end: sessionLog.end_date,
-                          unit_num: sessionLog.unit_num,
-                          unit_area: rentalInfos.unit_area,
-                          session_id: sessionId,
-                          user_balance: creditBalance,
-                          hasReservation: hasReservation
-                        })
+                        if(hasReservation && (currTime > sessionLog.end_date)){
+                          return Promise.reject(['skip', {
+                            hasRental: false,
+                            user_balance: creditBalance
+                          }]);
+                        }else{
+                          return Promise.resolve({
+                            hasRental: true,
+                            start: sessionLog.start_date,
+                            end: sessionLog.end_date,
+                            unit_num: sessionLog.unit_num,
+                            unit_area: rentalInfos.unit_area,
+                            session_id: sessionId,
+                            user_balance: creditBalance,
+                            hasReservation: hasReservation,
+                            isOwnerReservedUnit: true
+                          })
+                        }
                       })
                       .then(async rentalInfo => {
                         return await lockerAreas
@@ -196,6 +207,11 @@ router.get('/profile', async (req, res) => {
                             return Promise.resolve(rentalInfo);
                           })
                       })
+                  })
+                  .catch(err => {
+                    if(err[0] == 'skip'){
+                      return Promise.resolve(err[1])
+                    }
                   })
               }else {
                 return Promise.resolve({

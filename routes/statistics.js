@@ -46,7 +46,7 @@ router.get('/transaction/summary', async (req, res) => {
       console.error(err);
       res.send(body);
     })
-})
+});
 
 router.get('/transaction/college', async (req, res) => {
   let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZF9udW0iOjE0MjE2MTUsImlhdCI6MTU0OTc2NTkzNSwiZXhwIjoxNTQ5NzgwMzM1fQ.B5luDm0haW4Q1lpJ_ZPkFtOulLeNa07AEfc-aoxWR60";

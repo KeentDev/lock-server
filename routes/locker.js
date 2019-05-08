@@ -125,7 +125,10 @@ router.get('/area-info', async (req, res) => {
 
 router.get('/suggest-unit', async (req, res) => {
   const rentalInfos = db.collection('Rental_Unit_Info');
+  const sessionLogs = db.collection('Session_Log');
   var area = req.body.area_num || req.query.area_num || null;
+
+  const currTime = Math.floor((new Date).getTime()/1000);
 
   area = parseInt(area);
 
@@ -135,15 +138,18 @@ router.get('/suggest-unit', async (req, res) => {
     await rentalInfos
       .find({
         'unit_area': area,
-        'mode': 'available'
+        'mode': {
+          $in: ['available', 'reserved']
+        }
       }, {
         projection: {
-          'unit_num': 1,
+          'unit_area': 0,
+          'slave_address': 0,
           '_id': 0 
         }
       })
       .toArray()
-      .then(data => {
+      .then(async data => {
         let body = {};
 
         if (data.length > 0) {
@@ -154,7 +160,29 @@ router.get('/suggest-unit', async (req, res) => {
           let suggestedUnit;
 
           for(let i = 0; i < data.length; i++){
-            availUnits.push(data[i].unit_num);
+            if(data[i].mode == 'reserved'){
+              let isReserveAvail = await verifyObjectId(data[i].session_id)
+                .then(async id => {
+                  return await sessionLogs
+                    .findOne({
+                      _id: id
+                    })
+                    .then(res => {
+                      let endTime = res.end_date;
+                      if(currTime > endTime){
+                        return Promise.resolve(true);
+                      }else {
+                        return Promise.resolve(false);
+                      }
+                    })
+                });
+
+              if(isReserveAvail){
+                availUnits.push(data[i].unit_num);
+              }
+            }else{
+              availUnits.push(data[i].unit_num);
+            }
           }
 
           suggestedUnit = availUnits[randomIndex];
@@ -807,7 +835,6 @@ router.post('/transaction/session', async (req, res) => {
         newType = activitySession[activityAuth.indexOf(activityType)];
       }
       // TODO Make sure no duplication of the same activity type
-      console.log('activity type', activityType);
       if((activityType === activityObj.RENT_AUTH) || (activityType === activityObj.RESERVE_AUTH)){
         return await verifyObjectId(sessionId)
           .catch(err => {console.error(err); return Promise.reject(0)})
